@@ -1,0 +1,6 @@
+pandas>=2.2.2
+python-dotenv>=1.0.1
+requests>=2.32.3
+finance-datareader>=0.9.94
+python-telegram-bot>=21.10
+pillow>=11.2.1

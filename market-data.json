@@ -1,0 +1,95 @@
+{
+  "generated_at": "2026-05-10 17:11:46",
+  "items": [
+    {
+      "key": "fear_index",
+      "label": "공포지수",
+      "symbol": "CNN Fear & Greed",
+      "value": 67.0,
+      "display_value": "67",
+      "change_pct": null,
+      "change_text": "Greed",
+      "note": "미국 증시 투자 심리 지표"
+    },
+    {
+      "key": "kospi",
+      "label": "코스피",
+      "symbol": "^KS11",
+      "value": 7498.0,
+      "display_value": "7,498.0",
+      "change_pct": 0.11,
+      "change_text": "+0.11%",
+      "note": "국내 대형주 전반 흐름"
+    },
+    {
+      "key": "kosdaq",
+      "label": "코스닥",
+      "symbol": "^KQ11",
+      "value": 1207.719970703125,
+      "display_value": "1,207.7",
+      "change_pct": 0.71,
+      "change_text": "+0.71%",
+      "note": "성장주와 테마주 흐름"
+    },
+    {
+      "key": "nasdaq",
+      "label": "나스닥",
+      "symbol": "^IXIC",
+      "value": 26247.080078125,
+      "display_value": "26,247.1",
+      "change_pct": 1.71,
+      "change_text": "+1.71%",
+      "note": "미국 기술주 선호 흐름"
+    },
+    {
+      "key": "sp500",
+      "label": "S&P 500",
+      "symbol": "^GSPC",
+      "value": 7398.93017578125,
+      "display_value": "7,398.9",
+      "change_pct": 0.84,
+      "change_text": "+0.84%",
+      "note": "미국 증시 전반 기준 지수"
+    },
+    {
+      "key": "usdkrw",
+      "label": "달러/원",
+      "symbol": "KRW=X",
+      "value": 1461.47998046875,
+      "display_value": "1,461.48",
+      "change_pct": 0.46,
+      "change_text": "+0.46%",
+      "note": "원달러 환율 흐름"
+    },
+    {
+      "key": "oil",
+      "label": "유가",
+      "symbol": "CL=F",
+      "value": 95.41999816894531,
+      "display_value": "$95.42",
+      "change_pct": 0.64,
+      "change_text": "+0.64%",
+      "note": "WTI 기준 에너지 가격"
+    },
+    {
+      "key": "copper",
+      "label": "구리 지수",
+      "symbol": "HG=F",
+      "value": 6.296500205993652,
+      "display_value": "$6.30",
+      "change_pct": 2.76,
+      "change_text": "+2.76%",
+      "note": "구리 선물 기준 산업 금속 분위기"
+    },
+    {
+      "key": "gold",
+      "label": "금",
+      "symbol": "GC=F",
+      "value": 4730.7001953125,
+      "display_value": "$4,730.70",
+      "change_pct": 0.66,
+      "change_text": "+0.66%",
+      "note": "금 선물 기준 안전자산 흐름"
+    }
+  ]
+}

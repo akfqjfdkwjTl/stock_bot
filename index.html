@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>오늘의 관심종목</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="page-shell">
+    <header class="hero">
+      <p class="hero-kicker">KOREA STOCK WATCHLIST</p>
+      <h1>오늘의 관심종목</h1>
+      <div class="hero-meta">
+        <span>기준시각: <strong id="page-timestamp">2026-05-02 20:39:23</strong></span>
+        <span class="divider"></span>
+        <span>같은 섹터 중복 제거 적용</span>
+      </div>
+      <p class="hero-note">텔레그램 추천 결과와 시장 지표를 한 화면에서 확인하는 개인용 정적 페이지입니다.</p>
+    </header>
+
+    <main class="content">
+      <section class="section market-section">
+        <div class="section-head">
+          <div>
+            <p class="section-label">MACRO SNAPSHOT</p>
+            <h2>시장 지표</h2>
+          </div>
+          <span class="section-badge muted">market-data.json 연동</span>
+        </div>
+
+        <div class="market-grid" id="market-grid">
+          <article class="market-card market-card-fear" data-market-key="fear_index">
+            <p class="market-name">공포탐욕지수</p>
+            <div class="market-value-row">
+              <strong class="market-value">-</strong>
+              <span class="market-change">로딩 중</span>
+            </div>
+            <p class="market-note">실데이터를 불러오고 있습니다.</p>
+          </article>
+
+          <article class="market-card" data-market-key="kospi">
+            <p class="market-name">코스피</p>
+            <div class="market-value-row">
+              <strong class="market-value">-</strong>
+              <span class="market-change">로딩 중</span>
+            </div>
+            <p class="market-note">실데이터를 불러오고 있습니다.</p>
+          </article>
+
+          <article class="market-card" data-market-key="kosdaq">
+            <p class="market-name">코스닥</p>
+            <div class="market-value-row">
+              <strong class="market-value">-</strong>
+              <span class="market-change">로딩 중</span>
+            </div>
+            <p class="market-note">실데이터를 불러오고 있습니다.</p>
+          </article>
+
+          <article class="market-card" data-market-key="nasdaq">
+            <p class="market-name">나스닥</p>
+            <div class="market-value-row">
+              <strong class="market-value">-</strong>
+              <span class="market-change">로딩 중</span>
+            </div>
+            <p class="market-note">실데이터를 불러오고 있습니다.</p>
+          </article>
+
+          <article class="market-card" data-market-key="sp500">
+            <p class="market-name">S&amp;P 500</p>
+            <div class="market-value-row">
+              <strong class="market-value">-</strong>
+              <span class="market-change">로딩 중</span>
+            </div>
+            <p class="market-note">실데이터를 불러오고 있습니다.</p>
+          </article>
+
+          <article class="market-card" data-market-key="usdkrw">
+            <p class="market-name">달러/원</p>
+            <div class="market-value-row">
+              <strong class="market-value">-</strong>
+              <span class="market-change">로딩 중</span>
+            </div>
+            <p class="market-note">실데이터를 불러오고 있습니다.</p>
+          </article>
+
+          <article class="market-card" data-market-key="oil">
+            <p class="market-name">유가</p>
+            <div class="market-value-row">
+              <strong class="market-value">-</strong>
+              <span class="market-change">로딩 중</span>
+            </div>
+            <p class="market-note">실데이터를 불러오고 있습니다.</p>
+          </article>
+
+          <article class="market-card" data-market-key="copper">
+            <p class="market-name">구리 지수</p>
+            <div class="market-value-row">
+              <strong class="market-value">-</strong>
+              <span class="market-change">로딩 중</span>
+            </div>
+            <p class="market-note">실데이터를 불러오고 있습니다.</p>
+          </article>
+
+          <article class="market-card" data-market-key="gold">
+            <p class="market-name">금</p>
+            <div class="market-value-row">
+              <strong class="market-value">-</strong>
+              <span class="market-change">로딩 중</span>
+            </div>
+            <p class="market-note">실데이터를 불러오고 있습니다.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-head">
+          <div>
+            <p class="section-label">HIGH CONVICTION</p>
+            <h2>A급 추천</h2>
+          </div>
+          <span class="section-badge">강한 조건 통과 종목</span>
+        </div>
+
+        <div class="card-grid" id="grade-a-grid" data-source="sample-grade-a">
+          <article class="stock-card grade-a" data-sector="금융" data-ticker="086790">
+            <div class="card-top">
+              <div>
+                <p class="stock-name">하나금융지주</p>
+                <p class="stock-code">086790</p>
+              </div>
+              <div class="score-chip">63.4점</div>
+            </div>
+
+            <div class="meta-list">
+              <div class="meta-item">
+                <span class="meta-label">현재가</span>
+                <strong>127,900원</strong>
+              </div>
+              <div class="meta-item">
+                <span class="meta-label">전략</span>
+                <strong>swing</strong>
+              </div>
+              <div class="meta-item">
+                <span class="meta-label">테마</span>
+                <strong>금융</strong>
+              </div>
+            </div>
+
+            <div class="card-body">
+              <div class="info-block">
+                <p class="info-title">이슈 요약</p>
+                <p class="info-text">배당 확대와 밸류업 정책 기대가 은행주 재평가와 수익성 개선 흐름으로 이어지는 분위기입니다.</p>
+              </div>
+              <div class="info-block">
+                <p class="info-title">핵심 선정 이유</p>
+                <p class="info-text">박스권과 VCP 흐름이 함께 확인됐고, 금융주 내에서도 상대적으로 강한 수급과 추세가 살아 있습니다.</p>
+              </div>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-head">
+          <div>
+            <p class="section-label">MARKET FLOW</p>
+            <h2>관찰 후보</h2>
+          </div>
+          <span class="section-badge muted">시장 분위기 확인용</span>
+        </div>
+
+        <div class="card-grid" id="watch-grid" data-source="sample-watchlist">
+          <article class="stock-card" data-sector="지주회사" data-ticker="034730">
+            <div class="card-top">
+              <div>
+                <p class="stock-name">SK</p>
+                <p class="stock-code">034730</p>
+              </div>
+              <div class="score-chip muted">49.5점</div>
+            </div>
+
+            <div class="meta-list">
+              <div class="meta-item">
+                <span class="meta-label">현재가</span>
+                <strong>186,400원</strong>
+              </div>
+              <div class="meta-item">
+                <span class="meta-label">전략</span>
+                <strong>short</strong>
+              </div>
+              <div class="meta-item">
+                <span class="meta-label">테마</span>
+                <strong>지주회사</strong>
+              </div>
+            </div>
+
+            <div class="card-body">
+              <div class="info-block">
+                <p class="info-title">이슈 요약</p>
+                <p class="info-text">SK하이닉스 지분가치 부각과 그룹 자회사 재평가 기대가 지주회사 할인 축소 흐름으로 연결되는 분위기입니다.</p>
+              </div>
+              <div class="info-block">
+                <p class="info-title">핵심 선정 이유</p>
+                <p class="info-text">단기 거래량이 붙고 있고, 실적 모멘텀보다 지주사 디스카운트 해소 기대가 관찰 포인트입니다.</p>
+              </div>
+            </div>
+          </article>
+
+          <article class="stock-card" data-sector="자동차/전장" data-ticker="066570">
+            <div class="card-top">
+              <div>
+                <p class="stock-name">LG전자</p>
+                <p class="stock-code">066570</p>
+              </div>
+              <div class="score-chip muted">45.9점</div>
+            </div>
+
+            <div class="meta-list">
+              <div class="meta-item">
+                <span class="meta-label">현재가</span>
+                <strong>104,800원</strong>
+              </div>
+              <div class="meta-item">
+                <span class="meta-label">전략</span>
+                <strong>short</strong>
+              </div>
+              <div class="meta-item">
+                <span class="meta-label">테마</span>
+                <strong>자동차/전장</strong>
+              </div>
+            </div>
+
+            <div class="card-body">
+              <div class="info-block">
+                <p class="info-title">이슈 요약</p>
+                <p class="info-text">전장사업 성장과 AI 가전 확대 기대가 실적 개선 스토리로 연결되는 흐름이 이어지고 있습니다.</p>
+              </div>
+              <div class="info-block">
+                <p class="info-title">핵심 선정 이유</p>
+                <p class="info-text">단기 거래량 증가가 확인됐고, 전장과 생활가전 양쪽 모멘텀을 함께 볼 수 있는 종목입니다.</p>
+              </div>
+            </div>
+          </article>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
