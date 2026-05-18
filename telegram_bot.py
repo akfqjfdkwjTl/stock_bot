@@ -1,4 +1,4 @@
-"""텔레그램 명령형 봇 실행 파일입니다."""
+"""Telegram command bot entrypoint."""
 
 from __future__ import annotations
 
@@ -48,15 +48,8 @@ def _acquire_instance_lock() -> None:
     atexit.register(lambda: LOCK_PATH.unlink(missing_ok=True))
 
 
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.message is None:
-        return
-    await update.message.reply_text(
-        "주식 추천 봇입니다. /recommend 입력 시 종목을 보내드립니다."
-    )
-
-
 def build_recommendation_text(strategy: str | None = None) -> str:
+    """Return the recommendation message. This function must not send Telegram messages."""
     message, _errors = generate_screening_message(
         mode=SETTINGS.default_mode,
         strategy=strategy,
@@ -64,54 +57,70 @@ def build_recommendation_text(strategy: str | None = None) -> str:
     return message
 
 
-async def send_recommendation_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
+async def send_text_chunks(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    text: str,
+    *,
+    limit: int = 3500,
+) -> None:
     if update.effective_chat is None:
+        logging.error("Telegram send skipped: update.effective_chat is missing.")
         return
 
-    chunks = split_message(text.strip() or "추천 결과가 비어 있습니다.")
-    for chunk in chunks:
-        if update.message is not None:
-            await update.message.reply_text(chunk)
-        else:
-            await context.bot.send_message(chat_id=update.effective_chat.id, text=chunk)
+    chat_id = update.effective_chat.id
+    chunks = split_message(text.strip() or "추천 결과가 비어 있습니다.", limit=limit)
+    logging.info("Sending Telegram message: chat_id=%s, chunks=%s", chat_id, len(chunks))
+
+    for index, chunk in enumerate(chunks, start=1):
+        await context.bot.send_message(chat_id=chat_id, text=chunk)
+        logging.info("Sent Telegram chunk: chat_id=%s, chunk=%s/%s", chat_id, index, len(chunks))
+
+
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await send_text_chunks(
+        update,
+        context,
+        "주식 추천 봇입니다. /recommend 입력 시 종목을 보내드립니다.",
+    )
 
 
 async def recommend_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.message is None:
-        return
-
     strategy = None
     if context.args:
         requested = context.args[0].strip().lower()
         if requested not in VALID_STRATEGIES:
-            await update.message.reply_text(
-                "사용 가능한 전략은 short, swing, mid 입니다.\n예시: /recommend short"
+            await send_text_chunks(
+                update,
+                context,
+                "사용 가능한 전략은 short, swing, mid 입니다.\n예시: /recommend short",
             )
             return
         strategy = requested
 
-    await update.message.reply_text("종목을 분석하고 있습니다. 잠시만 기다려 주세요.")
+    await send_text_chunks(update, context, "종목을 분석하고 있습니다. 잠시만 기다려 주세요.")
 
     try:
         result = build_recommendation_text(strategy=strategy)
     except Exception as exc:
-        logging.exception("스크리닝 실행 실패")
-        await update.message.reply_text(f"분석 중 오류가 발생했습니다: {exc}")
+        logging.exception("Screening failed")
+        await send_text_chunks(update, context, f"분석 중 오류가 발생했습니다: {exc}")
         return
 
-    await send_recommendation_text(update, context, result)
+    await send_text_chunks(update, context, result)
 
-    if strategy is None:
+    if strategy is None and update.effective_chat is not None:
         try:
             capture_path = capture_dashboard()
             with open(capture_path, "rb") as image_file:
-                await update.message.reply_photo(
+                await context.bot.send_photo(
+                    chat_id=update.effective_chat.id,
                     photo=InputFile(image_file),
                     caption="추천 대시보드 캡처",
                 )
         except Exception as exc:
-            logging.exception("대시보드 캡처 실패")
-            await update.message.reply_text(f"대시보드 캡처 실패: {exc}")
+            logging.exception("Dashboard capture send failed")
+            await send_text_chunks(update, context, f"대시보드 캡처 실패: {exc}")
 
 
 def main() -> None:
