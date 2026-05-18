@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import atexit
 import logging
+import os
+from pathlib import Path
 
 from telegram import InputFile, Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
@@ -17,6 +20,32 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
 )
+
+LOCK_PATH = Path(__file__).with_suffix(".lock")
+
+
+def _process_exists(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def _acquire_instance_lock() -> None:
+    if LOCK_PATH.exists():
+        try:
+            existing_pid = int(LOCK_PATH.read_text(encoding="utf-8").strip())
+        except ValueError:
+            existing_pid = 0
+        if existing_pid and _process_exists(existing_pid):
+            raise RuntimeError(f"telegram_bot.py is already running with PID {existing_pid}.")
+        LOCK_PATH.unlink(missing_ok=True)
+
+    fd = os.open(str(LOCK_PATH), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    with os.fdopen(fd, "w", encoding="utf-8") as lock_file:
+        lock_file.write(str(os.getpid()))
+    atexit.register(lambda: LOCK_PATH.unlink(missing_ok=True))
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -73,12 +102,14 @@ def main() -> None:
     if not SETTINGS.telegram_bot_token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN 환경 변수가 설정되지 않았습니다.")
 
+    _acquire_instance_lock()
+
     application = ApplicationBuilder().token(SETTINGS.telegram_bot_token).build()
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("recommend", recommend_command))
 
     print("텔레그램 봇이 실행되었습니다. Ctrl+C 로 종료할 수 있습니다.")
-    application.run_polling()
+    application.run_polling(drop_pending_updates=True)
 
 
 if __name__ == "__main__":

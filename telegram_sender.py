@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import os
 from typing import Optional
 
 import requests
 
 from config import SETTINGS
+
+
+def _direct_send_enabled() -> bool:
+    return os.getenv("TELEGRAM_ALLOW_DIRECT_SEND", "").strip().lower() in {"1", "true", "yes"}
 
 
 def split_message(message: str, limit: int = 3500) -> list[str]:
@@ -38,6 +43,8 @@ def send_telegram_message(message: str) -> tuple[bool, Optional[str]]:
     """
     if not SETTINGS.telegram_bot_token or not SETTINGS.telegram_chat_id:
         return False, "텔레그램 환경변수가 비어 있어 전송을 건너뜁니다."
+    if not _direct_send_enabled():
+        return False, "직접 텔레그램 전송은 비활성화되어 있습니다. /recommend 명령으로만 전송합니다."
 
     url = f"https://api.telegram.org/bot{SETTINGS.telegram_bot_token}/sendMessage"
     payload = {
@@ -65,6 +72,8 @@ def send_telegram_photo(photo_path: str, caption: str = "") -> tuple[bool, Optio
     """텔레그램으로 이미지를 전송합니다."""
     if not SETTINGS.telegram_bot_token or not SETTINGS.telegram_chat_id:
         return False, "텔레그램 환경변수가 비어 있어 이미지 전송을 건너뜁니다."
+    if not _direct_send_enabled():
+        return False, "직접 텔레그램 이미지 전송은 비활성화되어 있습니다. /recommend 명령으로만 전송합니다."
 
     url = f"https://api.telegram.org/bot{SETTINGS.telegram_bot_token}/sendPhoto"
 

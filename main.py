@@ -9,7 +9,6 @@ from typing import Optional
 from config import SETTINGS
 from dashboard_capture import capture_dashboard, refresh_market_json, save_dashboard_data
 from stock_screener import run_screening, save_results_to_csv
-from telegram_sender import send_telegram_message, send_telegram_photo
 
 
 DISCLAIMER = (
@@ -564,26 +563,14 @@ def main(mode: str = "real", strategy: Optional[str] = None) -> None:
             f"프로그램 실행 중 오류가 발생했습니다: {exc}\n\n"
             f"{DISCLAIMER}"
         )
-        send_telegram_message(failure_message)
         print(failure_message)
         return
 
-    sent, error_message = send_telegram_message(message)
-    if error_message:
-        print(error_message)
-
     print(message)
-    if sent:
-        print("\n텔레그램 전송이 완료되었습니다.")
 
     if strategy is None:
         try:
-            capture_path = capture_dashboard()
-            photo_sent, photo_error = send_telegram_photo(str(capture_path), caption="추천 대시보드 캡처")
-            if photo_error:
-                print(photo_error)
-            elif photo_sent:
-                print("대시보드 캡처 전송이 완료되었습니다.")
+            capture_dashboard()
         except Exception as exc:
             print(f"대시보드 캡처 실패: {exc}")
 
