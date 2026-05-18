@@ -12,7 +12,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 from config import SETTINGS
 from dashboard_capture import capture_dashboard
-from main import VALID_STRATEGIES, generate_screening_payload
+from main import VALID_STRATEGIES, generate_screening_message
 from telegram_sender import split_message
 
 
@@ -56,6 +56,26 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     )
 
 
+def build_recommendation_text(strategy: str | None = None) -> str:
+    message, _errors = generate_screening_message(
+        mode=SETTINGS.default_mode,
+        strategy=strategy,
+    )
+    return message
+
+
+async def send_recommendation_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
+    if update.effective_chat is None:
+        return
+
+    chunks = split_message(text.strip() or "추천 결과가 비어 있습니다.")
+    for chunk in chunks:
+        if update.message is not None:
+            await update.message.reply_text(chunk)
+        else:
+            await context.bot.send_message(chat_id=update.effective_chat.id, text=chunk)
+
+
 async def recommend_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.message is None:
         return
@@ -73,17 +93,13 @@ async def recommend_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await update.message.reply_text("종목을 분석하고 있습니다. 잠시만 기다려 주세요.")
 
     try:
-        message, _errors, _display_items = generate_screening_payload(
-            mode=SETTINGS.default_mode,
-            strategy=strategy,
-        )
+        result = build_recommendation_text(strategy=strategy)
     except Exception as exc:
         logging.exception("스크리닝 실행 실패")
         await update.message.reply_text(f"분석 중 오류가 발생했습니다: {exc}")
         return
 
-    for chunk in split_message(message):
-        await update.message.reply_text(chunk)
+    await send_recommendation_text(update, context, result)
 
     if strategy is None:
         try:
