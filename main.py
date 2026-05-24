@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 
 from config import SETTINGS
 from dashboard_capture import capture_dashboard, refresh_market_json, save_dashboard_data
+from db import save_recommendations
 from stock_screener import run_screening, save_results_to_csv
 
 
@@ -540,6 +541,15 @@ def generate_screening_payload(
         display_items = _build_strategy_recommendations(strategy_results, strategy)
     else:
         final_groups = _build_final_recommendations(strategy_results)
+        try:
+            save_recommendations(
+                final_groups["grade_a"],
+                final_groups["grade_b"],
+                market="KR",
+            )
+        except Exception as exc:
+            print(f"추천 결과 DB 저장 실패: {exc}")
+
         generated_at = _format_kst_now()
         save_dashboard_data(
             mode=mode,

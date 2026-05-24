@@ -1,0 +1,144 @@
+"""SQLite database helpers for stock bot results."""
+
+from __future__ import annotations
+
+import sqlite3
+from datetime import datetime
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+
+BASE_DIR = Path(__file__).resolve().parent
+DB_PATH = BASE_DIR / "data" / "stock_bot.db"
+KST = ZoneInfo("Asia/Seoul")
+
+
+SCHEMA_STATEMENTS = (
+    """
+    CREATE TABLE IF NOT EXISTS recommendations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_date TEXT NOT NULL,
+        market TEXT NOT NULL,
+        ticker TEXT NOT NULL,
+        name TEXT NOT NULL,
+        rank INTEGER NOT NULL,
+        score REAL NOT NULL,
+        reason TEXT,
+        theme TEXT,
+        created_at TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS prices (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        date TEXT NOT NULL,
+        ticker TEXT NOT NULL,
+        name TEXT NOT NULL,
+        open REAL,
+        high REAL,
+        low REAL,
+        close REAL,
+        volume INTEGER,
+        created_at TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS news_signals (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        date TEXT NOT NULL,
+        ticker TEXT NOT NULL,
+        name TEXT NOT NULL,
+        keyword TEXT,
+        title TEXT,
+        source TEXT,
+        url TEXT,
+        score REAL,
+        created_at TEXT NOT NULL
+    )
+    """,
+)
+
+
+def _kst_now() -> datetime:
+    return datetime.now(KST)
+
+
+def _connect(db_path: Path | str = DB_PATH) -> sqlite3.Connection:
+    path = Path(db_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return sqlite3.connect(path)
+
+
+def init_db(db_path: Path | str = DB_PATH) -> Path:
+    """Create the SQLite database and required tables if they do not exist."""
+    path = Path(db_path)
+    with _connect(path) as connection:
+        for statement in SCHEMA_STATEMENTS:
+            connection.execute(statement)
+        connection.commit()
+    return path
+
+
+def save_recommendations(
+    grade_a_items: list[dict],
+    watch_items: list[dict],
+    *,
+    market: str = "KR",
+    db_path: Path | str = DB_PATH,
+) -> int:
+    """Persist final recommendation rows. Returns the number of inserted rows."""
+    init_db(db_path)
+    now = _kst_now()
+    run_date = now.strftime("%Y-%m-%d")
+    created_at = now.strftime("%Y-%m-%d %H:%M:%S KST")
+
+    rows: list[tuple] = []
+    rank = 1
+    for item in grade_a_items:
+        rows.append(
+            (
+                run_date,
+                market,
+                item["ticker"],
+                item["name"],
+                rank,
+                float(item.get("final_score", 0)),
+                item.get("summary_reason") or item.get("issue_summary", ""),
+                item.get("theme", ""),
+                created_at,
+            )
+        )
+        rank += 1
+
+    for item in watch_items:
+        rows.append(
+            (
+                run_date,
+                market,
+                item["ticker"],
+                item["name"],
+                rank,
+                float(item.get("observation_score", item.get("final_score", 0))),
+                item.get("summary_reason") or item.get("issue_summary", ""),
+                item.get("theme", ""),
+                created_at,
+            )
+        )
+        rank += 1
+
+    if not rows:
+        return 0
+
+    with _connect(db_path) as connection:
+        connection.executemany(
+            """
+            INSERT INTO recommendations (
+                run_date, market, ticker, name, rank, score, reason, theme, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+        connection.commit()
+
+    return len(rows)
