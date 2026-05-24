@@ -25,6 +25,7 @@ class Settings:
     dashboard_json_path: str = "dashboard-data.json"
     dashboard_capture_path: str = "dashboard_capture.png"
     enable_image_output: bool = os.getenv("ENABLE_IMAGE_OUTPUT", "false").strip().lower() == "true"
+    enable_dashboard_capture: bool = os.getenv("ENABLE_DASHBOARD_CAPTURE", "false").strip().lower() == "true"
     top_n_per_strategy: int = 5
     default_mode: str = os.getenv("SCREEN_MODE", "real").strip().lower() or "real"
     max_per_sector: int = int(os.getenv("MAX_PER_SECTOR", "1"))

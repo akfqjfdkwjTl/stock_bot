@@ -2,19 +2,19 @@
 
 from __future__ import annotations
 
+import os
 from collections import defaultdict
 from datetime import datetime
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from config import SETTINGS
 from dashboard_capture import capture_dashboard, refresh_market_json, save_dashboard_data
 from stock_screener import run_screening, save_results_to_csv
 
 
-DISCLAIMER = (
-    "※ 이 결과는 자동매매 또는 매수 추천이 아니라 조건 기반 관심종목 선별 결과입니다."
-)
 VALID_STRATEGIES = ("short", "swing", "mid")
+KST = ZoneInfo("Asia/Seoul")
 
 SECTOR_GROUPS = {
     "금융": "금융",
@@ -38,6 +38,11 @@ SECTOR_GROUPS = {
 def _format_currency(value: int) -> str:
     """숫자를 원화 형식으로 보여줍니다."""
     return f"{value:,}원"
+
+
+def _format_kst_now() -> str:
+    """메시지와 대시보드에 사용할 한국시간 기준시각입니다."""
+    return datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S KST")
 
 
 def _build_title(mode: str) -> str:
@@ -148,6 +153,18 @@ def _append_unique_sector(
             continue
         selected.append(row)
         used_sectors.add(sector)
+
+
+def _append_unique_ticker(items: list[dict], selected: list[dict], limit: int) -> None:
+    """섹터 제한 없이 점수 상위 종목을 중복 없이 채웁니다."""
+    selected_tickers = {row["ticker"] for row in selected}
+    for row in items:
+        if len(selected) >= limit:
+            break
+        if row["ticker"] in selected_tickers:
+            continue
+        selected.append(row)
+        selected_tickers.add(row["ticker"])
 
 
 def _calculate_final_score(entry: dict) -> float:
@@ -311,28 +328,17 @@ def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dic
         row for row in all_candidates
         if row["final_score"] >= SETTINGS.grade_a_threshold and _passes_vcp_gate(row)
     ]
-    observation_candidates = [
-        row for row in all_candidates
-        if SETTINGS.grade_b_threshold <= row["observation_score"] < SETTINGS.grade_a_threshold
-    ]
-    observation_fallback_candidates = [
-        row for row in all_candidates
-        if 40 <= row["observation_score"] < SETTINGS.grade_b_threshold
-    ]
-
     selected_a: list[dict] = []
-    selected_observation: list[dict] = []
     used_sectors: set[str] = set()
 
     _append_unique_sector(a_candidates, selected_a, used_sectors, SETTINGS.final_recommendation_limit)
-    _append_unique_sector(observation_candidates, selected_observation, used_sectors, SETTINGS.final_recommendation_limit)
-    if len(selected_observation) < SETTINGS.final_recommendation_limit:
-        _append_unique_sector(
-            observation_fallback_candidates,
-            selected_observation,
-            used_sectors,
-            SETTINGS.final_recommendation_limit,
-        )
+    selected_a_tickers = {row["ticker"] for row in selected_a}
+    selected_observation: list[dict] = []
+    _append_unique_ticker(
+        [row for row in all_candidates if row["ticker"] not in selected_a_tickers],
+        selected_observation,
+        SETTINGS.final_recommendation_limit,
+    )
 
     return {
         "grade_a": selected_a,
@@ -429,7 +435,7 @@ def build_message(
     """텔레그램 전송용 문자 메시지를 만듭니다."""
     lines: list[str] = []
     lines.append(_build_title(mode))
-    lines.append(f"기준시각: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    lines.append(f"기준시각: {_format_kst_now()}")
     if strategy:
         lines.append(f"요청 전략: {strategy}")
     lines.append("")
@@ -457,7 +463,6 @@ def build_message(
             next_index,
             "observation_score",
         )
-        lines.append(DISCLAIMER)
         return "\n".join(lines)
 
     if strategy == "swing":
@@ -499,7 +504,6 @@ def build_message(
         lines.append(f"분석 중 오류 종목 수: {error_count}")
         lines.append("")
 
-    lines.append(DISCLAIMER)
     return "\n".join(lines)
 
 
@@ -536,7 +540,7 @@ def generate_screening_payload(
         display_items = _build_strategy_recommendations(strategy_results, strategy)
     else:
         final_groups = _build_final_recommendations(strategy_results)
-        generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        generated_at = _format_kst_now()
         save_dashboard_data(
             mode=mode,
             generated_at=generated_at,
@@ -560,15 +564,14 @@ def main(mode: str = "real", strategy: Optional[str] = None) -> None:
         print(f"실데이터 조회 실패 원인: {exc}")
         failure_message = (
             f"{_build_title(mode)}\n"
-            f"프로그램 실행 중 오류가 발생했습니다: {exc}\n\n"
-            f"{DISCLAIMER}"
+            f"프로그램 실행 중 오류가 발생했습니다: {exc}"
         )
         print(failure_message)
         return
 
     print(message)
 
-    if strategy is None:
+    if strategy is None and SETTINGS.enable_dashboard_capture:
         try:
             capture_dashboard()
         except Exception as exc:
@@ -576,4 +579,9 @@ def main(mode: str = "real", strategy: Optional[str] = None) -> None:
 
 
 if __name__ == "__main__":
+    if os.getenv("PM2_HOME") or os.getenv("pm_id") is not None:
+        raise SystemExit(
+            "main.py is a one-shot console script and must not be run by PM2. "
+            "Run telegram_bot.py with PM2 instead."
+        )
     main(mode=SETTINGS.default_mode)

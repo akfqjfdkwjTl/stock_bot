@@ -7,11 +7,10 @@ import logging
 import os
 from pathlib import Path
 
-from telegram import InputFile, Update
+from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 from config import SETTINGS
-from dashboard_capture import capture_dashboard
 from main import VALID_STRATEGIES, generate_screening_message
 from telegram_sender import split_message
 
@@ -109,8 +108,11 @@ async def recommend_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     await send_text_chunks(update, context, result)
 
-    if strategy is None and update.effective_chat is not None:
+    if strategy is None and update.effective_chat is not None and SETTINGS.enable_dashboard_capture:
         try:
+            from dashboard_capture import capture_dashboard
+            from telegram import InputFile
+
             capture_path = capture_dashboard()
             with open(capture_path, "rb") as image_file:
                 await context.bot.send_photo(
