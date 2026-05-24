@@ -4,3 +4,5 @@ requests>=2.32.3
 finance-datareader>=0.9.94
 python-telegram-bot>=21.10
 pillow>=11.2.1
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
