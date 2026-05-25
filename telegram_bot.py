@@ -21,6 +21,10 @@ logging.basicConfig(
 )
 
 LOCK_PATH = Path(__file__).with_suffix(".lock")
+DASHBOARD_PUBLIC_URL = "http://168.110.116.149:8000"
+DASHBOARD_INTERNAL_URL = "http://127.0.0.1:8000"
+DASHBOARD_SCREENSHOT_PATH = Path(__file__).with_name("dashboard.png")
+DASHBOARD_LINK_TEXT = f"🌐 대시보드\n{DASHBOARD_PUBLIC_URL}"
 
 
 def _process_exists(pid: int) -> bool:
@@ -53,7 +57,42 @@ def build_recommendation_text(strategy: str | None = None) -> str:
         mode=SETTINGS.default_mode,
         strategy=strategy,
     )
-    return message
+    return f"{message.rstrip()}\n\n{DASHBOARD_LINK_TEXT}"
+
+
+async def capture_web_dashboard(output_path: Path = DASHBOARD_SCREENSHOT_PATH) -> Path:
+    """Capture the FastAPI dashboard with Playwright."""
+    from playwright.async_api import async_playwright
+
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch()
+        page = await browser.new_page(viewport={"width": 430, "height": 1200})
+        try:
+            await page.goto(DASHBOARD_INTERNAL_URL, wait_until="networkidle", timeout=60000)
+            await page.screenshot(path=str(output_path), full_page=True)
+        finally:
+            await browser.close()
+
+    return output_path
+
+
+async def send_dashboard_screenshot(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_chat is None:
+        logging.error("Dashboard screenshot send skipped: update.effective_chat is missing.")
+        return
+
+    try:
+        from telegram import InputFile
+
+        capture_path = await capture_web_dashboard()
+        with open(capture_path, "rb") as image_file:
+            await context.bot.send_photo(
+                chat_id=update.effective_chat.id,
+                photo=InputFile(image_file, filename="dashboard.png"),
+                caption="대시보드 캡처",
+            )
+    except Exception:
+        logging.exception("Dashboard screenshot capture/send failed")
 
 
 async def send_text_chunks(
@@ -108,21 +147,8 @@ async def recommend_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     await send_text_chunks(update, context, result)
 
-    if strategy is None and update.effective_chat is not None and SETTINGS.enable_dashboard_capture:
-        try:
-            from dashboard_capture import capture_dashboard
-            from telegram import InputFile
-
-            capture_path = capture_dashboard()
-            with open(capture_path, "rb") as image_file:
-                await context.bot.send_photo(
-                    chat_id=update.effective_chat.id,
-                    photo=InputFile(image_file),
-                    caption="추천 대시보드 캡처",
-                )
-        except Exception as exc:
-            logging.exception("Dashboard capture send failed")
-            await send_text_chunks(update, context, f"대시보드 캡처 실패: {exc}")
+    if strategy is None:
+        await send_dashboard_screenshot(update, context)
 
 
 def main() -> None:
