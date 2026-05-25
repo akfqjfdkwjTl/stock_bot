@@ -92,6 +92,67 @@ def _fetch_yfinance_market_data(
         return _unavailable_market_item(name, note)
 
 
+def _format_price(value: float) -> str:
+    return f"{value:,.0f}원"
+
+
+def _format_volume(value: float) -> str:
+    return f"{int(value):,}"
+
+
+def _empty_price_data() -> dict:
+    return {
+        "current_price": "N/A",
+        "change_pct": "N/A",
+        "change_direction": "neutral",
+        "volume": "N/A",
+    }
+
+
+def _fetch_yfinance_price(symbol: str) -> dict | None:
+    import yfinance as yf
+
+    history = yf.Ticker(symbol).history(period="7d", interval="1d", auto_adjust=False)
+    if history.empty:
+        return None
+
+    closes = history["Close"].dropna()
+    if len(closes) < 2:
+        return None
+
+    latest = float(closes.iloc[-1])
+    previous = float(closes.iloc[-2])
+    if previous == 0:
+        return None
+
+    latest_row = history.dropna(subset=["Close"]).iloc[-1]
+    volume = float(latest_row["Volume"]) if "Volume" in latest_row else 0
+    change_pct = (latest - previous) / previous * 100
+    return {
+        "current_price": _format_price(latest),
+        "change_pct": _format_change(change_pct),
+        "change_direction": _change_direction(change_pct),
+        "volume": _format_volume(volume) if volume else "N/A",
+    }
+
+
+def get_stock_price_data(ticker: str) -> dict:
+    """Fetch Korean stock price data. Try KOSPI first, then KOSDAQ."""
+    clean_ticker = "".join(ch for ch in ticker if ch.isdigit()).zfill(6)
+    if not clean_ticker:
+        return _empty_price_data()
+
+    for suffix in (".KS", ".KQ"):
+        try:
+            price_data = _fetch_yfinance_price(f"{clean_ticker}{suffix}")
+            if price_data:
+                return price_data
+        except Exception:
+            continue
+
+    return _empty_price_data()
+
+
 def get_fear_greed() -> dict:
     try:
         session = requests.Session()
@@ -216,18 +277,25 @@ def render_stock_card(item: Recommendation, *, featured: bool = False) -> str:
     featured_class = " featured" if featured else ""
     reason = item.reason or "저장된 선정 이유가 없습니다."
     theme = item.theme or "기타"
+    price_data = get_stock_price_data(item.ticker)
+    change_direction = price_data["change_direction"]
     return f"""
       <article class="stock-card{featured_class}">
         <div class="card-top">
           <div>
             <h3>{esc(item.name)}</h3>
             <p>{esc(item.ticker)}</p>
+            <div class="price-line">
+              <span class="price-label">현재가</span>
+              <strong>{esc(price_data["current_price"])}</strong>
+              <span class="stock-change {esc(change_direction)}">{esc(price_data["change_pct"])}</span>
+            </div>
           </div>
           <span class="score">{item.score:.1f}점</span>
         </div>
         <div class="stock-meta">
           <div><span>순위</span><strong>{item.rank}</strong></div>
-          <div><span>시장</span><strong>{esc(item.market)}</strong></div>
+          <div><span>거래량</span><strong>{esc(price_data["volume"])}</strong></div>
           <div><span>테마</span><strong>{esc(theme)}</strong></div>
         </div>
         <div class="info-block">
@@ -450,6 +518,35 @@ def render_dashboard() -> str:
       letter-spacing: 0;
       overflow-wrap: anywhere;
     }}
+    .price-line {{
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+      margin-top: 9px;
+    }}
+    .price-line strong {{
+      color: var(--text);
+      font-size: 13px;
+      line-height: 1.2;
+      white-space: nowrap;
+    }}
+    .price-label {{
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: 0;
+    }}
+    .stock-change {{
+      padding: 4px 7px;
+      border-radius: 999px;
+      font-size: 10px;
+      font-weight: 900;
+      white-space: nowrap;
+    }}
+    .stock-change.up {{ color: var(--green); background: rgba(73,224,154,.13); }}
+    .stock-change.down {{ color: var(--red); background: rgba(255,117,117,.13); }}
+    .stock-change.neutral {{ color: var(--muted); background: rgba(142,154,173,.14); }}
     .score {{
       flex: 0 0 auto;
       padding: 5px 8px;
@@ -508,16 +605,54 @@ def render_dashboard() -> str:
       font-size: 12px;
     }}
     @media (max-width: 900px) {{
-      .market-grid, .stock-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
+      .market-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
+      .stock-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
       .market-card-wide {{ grid-column: span 2; }}
     }}
+    @media (max-width: 768px) {{
+      .shell {{ width: min(100% - 18px, 1120px); padding: 10px 0 36px; }}
+      .hero {{ padding: 18px; }}
+      h1 {{ margin-bottom: 8px; font-size: 34px; }}
+      .hero-meta {{ gap: 7px; font-size: 12px; }}
+      .hero-note {{ margin-top: 10px; font-size: 12px; line-height: 1.5; }}
+      .content {{ gap: 14px; margin-top: 14px; }}
+      .section {{ padding: 14px; }}
+      .section-head {{ align-items: flex-start; flex-direction: column; gap: 9px; margin-bottom: 12px; }}
+      h2 {{ font-size: 25px; }}
+      .badge {{ padding: 6px 9px; font-size: 10px; }}
+      .market-grid {{
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }}
+      .market-card,
+      .market-card-wide {{
+        grid-column: span 1;
+        min-height: 92px;
+        padding: 12px;
+      }}
+      .market-value-row {{ margin-top: 9px; gap: 6px; }}
+      .market-value-row strong,
+      .market-card-wide .market-value-row strong {{
+        font-size: 22px;
+      }}
+      .micro {{ font-size: 12px; letter-spacing: 0; }}
+      .change {{ padding: 4px 7px; font-size: 9px; }}
+      .market-note {{
+        margin-top: 9px;
+        font-size: 10px;
+        line-height: 1.35;
+      }}
+      .stock-grid {{ grid-template-columns: 1fr; gap: 10px; }}
+      .stock-card, .empty-card {{ padding: 14px; }}
+      .stock-card h3 {{ font-size: 18px; }}
+      .stock-meta {{ margin: 12px 0; }}
+      .stock-meta div {{ min-height: 48px; padding: 8px; }}
+      .info-block p, .empty-card p {{ font-size: 11px; line-height: 1.55; }}
+    }}
     @media (max-width: 560px) {{
-      .shell {{ width: min(100% - 18px, 930px); padding-top: 9px; }}
-      .hero, .section {{ padding: 18px; }}
-      .section-head {{ align-items: flex-start; flex-direction: column; }}
-      .market-grid, .stock-grid {{ grid-template-columns: 1fr; }}
-      .market-card-wide {{ grid-column: span 1; }}
-      .market-card-wide .market-value-row strong {{ font-size: 38px; }}
+      .market-value-row strong,
+      .market-card-wide .market-value-row strong {{ font-size: 20px; }}
+      .market-note {{ display: none; }}
     }}
   </style>
 </head>
