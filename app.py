@@ -38,23 +38,6 @@ def get_kst_timestamp() -> str:
     return datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S KST")
 
 
-def get_mock_market_indicators() -> list[dict]:
-    """Fallback market data used when live providers fail."""
-    return [
-        {"name": "Fear & Greed", "value": "63", "change": "Greed", "direction": "up", "note": "미국 CNN 공포탐욕지수"},
-        {"name": "NASDAQ", "value": "17,516.10", "change": "+0.72%", "direction": "up", "note": "미국 기술주 대표 지수"},
-        {"name": "S&P500", "value": "5,911.11", "change": "-0.18%", "direction": "down", "note": "미국 대형주 대표 지수"},
-        {"name": "KOSPI", "value": "2,625.10", "change": "+0.41%", "direction": "up", "note": "국내 유가증권시장"},
-        {"name": "KOSDAQ", "value": "740.85", "change": "-1.26%", "direction": "down", "note": "국내 성장주 시장"},
-        {"name": "USD/KRW", "value": "1,501.11", "change": "+0.30%", "direction": "up", "note": "원달러 환율"},
-        {"name": "GOLD", "value": "$3,358.40", "change": "-0.49%", "direction": "down", "note": "국제 금 선물"},
-        {"name": "WTI", "value": "$62.33", "change": "-0.95%", "direction": "down", "note": "서부텍사스산 원유"},
-    ]
-
-
-MOCK_MARKET_BY_NAME = {item["name"]: item for item in get_mock_market_indicators()}
-
-
 def _format_market_value(value: float, *, prefix: str = "") -> str:
     return f"{prefix}{value:,.2f}"
 
@@ -67,14 +50,17 @@ def _change_direction(change_pct: float) -> str:
     return "up" if change_pct >= 0 else "down"
 
 
-def _fallback_market_item(name: str, note: str | None = None) -> dict:
-    fallback = dict(MOCK_MARKET_BY_NAME[name])
-    if note:
-        fallback["note"] = note
-    return fallback
+def _unavailable_market_item(name: str, note: str) -> dict:
+    return {
+        "name": name,
+        "value": "N/A",
+        "change": "N/A",
+        "direction": "neutral",
+        "note": f"{note} / 데이터 조회 실패",
+    }
 
 
-def _fetch_yfinance_indicator(
+def _fetch_yfinance_market_data(
     *,
     name: str,
     symbol: str,
@@ -103,10 +89,10 @@ def _fetch_yfinance_indicator(
             "note": note,
         }
     except Exception:
-        return _fallback_market_item(name, f"{note} / fallback")
+        return _unavailable_market_item(name, note)
 
 
-def _fetch_fear_greed_index() -> dict:
+def get_fear_greed() -> dict:
     try:
         session = requests.Session()
         headers = {
@@ -141,21 +127,25 @@ def _fetch_fear_greed_index() -> dict:
             "note": "미국 CNN 공포탐욕지수",
         }
     except Exception:
-        return _fallback_market_item("Fear & Greed", "미국 CNN 공포탐욕지수 / fallback")
+        return _unavailable_market_item("Fear & Greed", "미국 CNN 공포탐욕지수")
+
+
+def get_market_data() -> list[dict]:
+    """Fetch live market data on each page request."""
+    return [
+        get_fear_greed(),
+        _fetch_yfinance_market_data(name="NASDAQ", symbol="^IXIC", note="미국 기술주 대표 지수"),
+        _fetch_yfinance_market_data(name="S&P500", symbol="^GSPC", note="미국 대형주 대표 지수"),
+        _fetch_yfinance_market_data(name="KOSPI", symbol="^KS11", note="국내 유가증권시장"),
+        _fetch_yfinance_market_data(name="KOSDAQ", symbol="^KQ11", note="국내 성장주 시장"),
+        _fetch_yfinance_market_data(name="USD/KRW", symbol="KRW=X", note="원달러 환율"),
+        _fetch_yfinance_market_data(name="GOLD", symbol="GC=F", note="국제 금 선물", prefix="$"),
+        _fetch_yfinance_market_data(name="WTI", symbol="CL=F", note="서부텍사스산 원유", prefix="$"),
+    ]
 
 
 def get_market_indicators() -> list[dict]:
-    """Fetch live market data on each page request, with per-card fallback."""
-    return [
-        _fetch_fear_greed_index(),
-        _fetch_yfinance_indicator(name="NASDAQ", symbol="^IXIC", note="미국 기술주 대표 지수"),
-        _fetch_yfinance_indicator(name="S&P500", symbol="^GSPC", note="미국 대형주 대표 지수"),
-        _fetch_yfinance_indicator(name="KOSPI", symbol="^KS11", note="국내 유가증권시장"),
-        _fetch_yfinance_indicator(name="KOSDAQ", symbol="^KQ11", note="국내 성장주 시장"),
-        _fetch_yfinance_indicator(name="USD/KRW", symbol="KRW=X", note="원달러 환율"),
-        _fetch_yfinance_indicator(name="GOLD", symbol="GC=F", note="국제 금 선물", prefix="$"),
-        _fetch_yfinance_indicator(name="WTI", symbol="CL=F", note="서부텍사스산 원유", prefix="$"),
-    ]
+    return get_market_data()
 
 
 def load_latest_recommendations(limit: int = 5) -> tuple[list[Recommendation], str | None]:
@@ -207,7 +197,9 @@ def esc(value: object) -> str:
 
 def render_market_card(item: dict, index: int) -> str:
     wide_class = " market-card-wide" if index == 0 else ""
-    direction = "up" if item.get("direction") == "up" else "down"
+    direction = item.get("direction")
+    if direction not in {"up", "down", "neutral"}:
+        direction = "neutral"
     return f"""
       <article class="market-card{wide_class}">
         <p class="micro">{esc(item["name"])}</p>
@@ -422,6 +414,7 @@ def render_dashboard() -> str:
     }}
     .change.up {{ color: var(--green); background: rgba(73,224,154,.13); }}
     .change.down {{ color: var(--red); background: rgba(255,117,117,.13); }}
+    .change.neutral {{ color: var(--muted); background: rgba(142,154,173,.14); }}
     .market-note {{
       margin: 12px 0 0;
       color: var(--muted);
@@ -548,7 +541,7 @@ def render_dashboard() -> str:
             <p class="section-label">MACRO SNAPSHOT</p>
             <h2>시장 지표</h2>
           </div>
-          <span class="badge">live data / fallback</span>
+          <span class="badge">live market data</span>
         </div>
         <div class="market-grid">{market_cards}</div>
       </section>
