@@ -24,7 +24,6 @@ LOCK_PATH = Path(__file__).with_suffix(".lock")
 DASHBOARD_PUBLIC_URL = "http://168.110.116.149:8000"
 DASHBOARD_INTERNAL_URL = "http://127.0.0.1:8000"
 DASHBOARD_SCREENSHOT_PATH = Path(__file__).with_name("dashboard.png")
-DASHBOARD_LINK_TEXT = f"🌐 대시보드\n{DASHBOARD_PUBLIC_URL}"
 
 
 def _process_exists(pid: int) -> bool:
@@ -57,7 +56,7 @@ def build_recommendation_text(strategy: str | None = None) -> str:
         mode=SETTINGS.default_mode,
         strategy=strategy,
     )
-    return f"{message.rstrip()}\n\n{DASHBOARD_LINK_TEXT}"
+    return message
 
 
 async def capture_web_dashboard(output_path: Path = DASHBOARD_SCREENSHOT_PATH) -> Path:

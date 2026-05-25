@@ -16,6 +16,7 @@ from stock_screener import run_screening, save_results_to_csv
 
 VALID_STRATEGIES = ("short", "swing", "mid")
 KST = ZoneInfo("Asia/Seoul")
+DASHBOARD_URL = "http://168.110.116.149:8000"
 
 SECTOR_GROUPS = {
     "금융": "금융",
@@ -51,6 +52,13 @@ def _build_title(mode: str) -> str:
     if mode == "real":
         return "[국내주식 조건 기반 관심종목][실데이터 모드]"
     return "[국내주식 조건 기반 관심종목][샘플 모드]"
+
+
+def _append_dashboard_link(lines: list[str]) -> None:
+    """텔레그램과 콘솔 메시지 하단에 웹 대시보드 링크를 붙입니다."""
+    lines.append("")
+    lines.append("🌐 대시보드")
+    lines.append(DASHBOARD_URL)
 
 
 def _normalize_sector(theme: str) -> str:
@@ -464,6 +472,7 @@ def build_message(
             next_index,
             "observation_score",
         )
+        _append_dashboard_link(lines)
         return "\n".join(lines)
 
     if strategy == "swing":
@@ -505,6 +514,7 @@ def build_message(
         lines.append(f"분석 중 오류 종목 수: {error_count}")
         lines.append("")
 
+    _append_dashboard_link(lines)
     return "\n".join(lines)
 
 
