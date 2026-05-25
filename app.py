@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import requests
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 
@@ -37,8 +38,8 @@ def get_kst_timestamp() -> str:
     return datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S KST")
 
 
-def get_market_indicators() -> list[dict]:
-    """Mock market data. Replace this function later with real data providers."""
+def get_mock_market_indicators() -> list[dict]:
+    """Fallback market data used when live providers fail."""
     return [
         {"name": "Fear & Greed", "value": "63", "change": "Greed", "direction": "up", "note": "미국 CNN 공포탐욕지수"},
         {"name": "NASDAQ", "value": "17,516.10", "change": "+0.72%", "direction": "up", "note": "미국 기술주 대표 지수"},
@@ -48,6 +49,112 @@ def get_market_indicators() -> list[dict]:
         {"name": "USD/KRW", "value": "1,501.11", "change": "+0.30%", "direction": "up", "note": "원달러 환율"},
         {"name": "GOLD", "value": "$3,358.40", "change": "-0.49%", "direction": "down", "note": "국제 금 선물"},
         {"name": "WTI", "value": "$62.33", "change": "-0.95%", "direction": "down", "note": "서부텍사스산 원유"},
+    ]
+
+
+MOCK_MARKET_BY_NAME = {item["name"]: item for item in get_mock_market_indicators()}
+
+
+def _format_market_value(value: float, *, prefix: str = "") -> str:
+    return f"{prefix}{value:,.2f}"
+
+
+def _format_change(change_pct: float) -> str:
+    return f"{change_pct:+.2f}%"
+
+
+def _change_direction(change_pct: float) -> str:
+    return "up" if change_pct >= 0 else "down"
+
+
+def _fallback_market_item(name: str, note: str | None = None) -> dict:
+    fallback = dict(MOCK_MARKET_BY_NAME[name])
+    if note:
+        fallback["note"] = note
+    return fallback
+
+
+def _fetch_yfinance_indicator(
+    *,
+    name: str,
+    symbol: str,
+    note: str,
+    prefix: str = "",
+) -> dict:
+    try:
+        import yfinance as yf
+
+        history = yf.Ticker(symbol).history(period="7d", interval="1d", auto_adjust=False)
+        closes = history["Close"].dropna()
+        if len(closes) < 2:
+            raise ValueError(f"{symbol} close data is insufficient")
+
+        latest = float(closes.iloc[-1])
+        previous = float(closes.iloc[-2])
+        if previous == 0:
+            raise ValueError(f"{symbol} previous close is zero")
+
+        change_pct = (latest - previous) / previous * 100
+        return {
+            "name": name,
+            "value": _format_market_value(latest, prefix=prefix),
+            "change": _format_change(change_pct),
+            "direction": _change_direction(change_pct),
+            "note": note,
+        }
+    except Exception:
+        return _fallback_market_item(name, f"{note} / fallback")
+
+
+def _fetch_fear_greed_index() -> dict:
+    try:
+        session = requests.Session()
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36"
+            ),
+            "Accept-Language": "en-US,en;q=0.9",
+        }
+        page_url = "https://edition.cnn.com/markets/fear-and-greed"
+        session.get(page_url, headers={**headers, "Accept": "text/html,application/xhtml+xml"}, timeout=5)
+        response = session.get(
+            "https://production.dataviz.cnn.io/index/fearandgreed/graphdata",
+            headers={
+                **headers,
+                "Accept": "application/json, text/plain, */*",
+                "Referer": page_url,
+                "Origin": "https://edition.cnn.com",
+            },
+            timeout=5,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        current = payload.get("fear_and_greed", {})
+        score = round(float(current["score"]))
+        rating = str(current.get("rating") or "")
+        return {
+            "name": "Fear & Greed",
+            "value": str(score),
+            "change": rating.title() if rating else "Live",
+            "direction": "up" if score >= 50 else "down",
+            "note": "미국 CNN 공포탐욕지수",
+        }
+    except Exception:
+        return _fallback_market_item("Fear & Greed", "미국 CNN 공포탐욕지수 / fallback")
+
+
+def get_market_indicators() -> list[dict]:
+    """Fetch live market data on each page request, with per-card fallback."""
+    return [
+        _fetch_fear_greed_index(),
+        _fetch_yfinance_indicator(name="NASDAQ", symbol="^IXIC", note="미국 기술주 대표 지수"),
+        _fetch_yfinance_indicator(name="S&P500", symbol="^GSPC", note="미국 대형주 대표 지수"),
+        _fetch_yfinance_indicator(name="KOSPI", symbol="^KS11", note="국내 유가증권시장"),
+        _fetch_yfinance_indicator(name="KOSDAQ", symbol="^KQ11", note="국내 성장주 시장"),
+        _fetch_yfinance_indicator(name="USD/KRW", symbol="KRW=X", note="원달러 환율"),
+        _fetch_yfinance_indicator(name="GOLD", symbol="GC=F", note="국제 금 선물", prefix="$"),
+        _fetch_yfinance_indicator(name="WTI", symbol="CL=F", note="서부텍사스산 원유", prefix="$"),
     ]
 
 
@@ -441,7 +548,7 @@ def render_dashboard() -> str:
             <p class="section-label">MACRO SNAPSHOT</p>
             <h2>시장 지표</h2>
           </div>
-          <span class="badge">mock data / live-ready</span>
+          <span class="badge">live data / fallback</span>
         </div>
         <div class="market-grid">{market_cards}</div>
       </section>
