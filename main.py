@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from collections import defaultdict
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 from zoneinfo import ZoneInfo
 
@@ -12,11 +13,13 @@ from config import SETTINGS
 from dashboard_capture import capture_dashboard, refresh_market_json, save_dashboard_data
 from db import save_recommendations
 from stock_screener import run_screening, save_results_to_csv
+from telegram_sender import send_telegram_message, send_telegram_photo
 
 
 VALID_STRATEGIES = ("short", "swing", "mid")
 KST = ZoneInfo("Asia/Seoul")
 DASHBOARD_URL = "http://168.110.116.149:8000"
+DASHBOARD_IMAGE_PATH = "dashboard.png"
 
 SECTOR_GROUPS = {
     "금융": "금융",
@@ -591,11 +594,26 @@ def main(mode: str = "real", strategy: Optional[str] = None) -> None:
 
     print(message)
 
-    if strategy is None and SETTINGS.enable_dashboard_capture:
+    sent, send_error = send_telegram_message(message)
+    if send_error:
+        print(f"텔레그램 메시지 전송 실패: {send_error}")
+    elif sent:
+        print("텔레그램 메시지 전송 완료")
+
+    if strategy is None:
         try:
-            capture_dashboard()
+            dashboard_path = capture_dashboard(DASHBOARD_IMAGE_PATH)
+            if not Path(dashboard_path).exists():
+                print(f"대시보드 이미지 파일이 없습니다: {dashboard_path}")
+                return
+
+            photo_sent, photo_error = send_telegram_photo(str(dashboard_path), caption="대시보드 캡처")
+            if photo_error:
+                print(f"대시보드 이미지 전송 실패: {photo_error}")
+            elif photo_sent:
+                print("대시보드 이미지 전송 완료")
         except Exception as exc:
-            print(f"대시보드 캡처 실패: {exc}")
+            print(f"대시보드 이미지 캡처/전송 실패: {exc}")
 
 
 if __name__ == "__main__":
