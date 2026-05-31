@@ -10,7 +10,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import requests
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 from fastapi.responses import HTMLResponse
 
 
@@ -209,34 +209,74 @@ def get_market_indicators() -> list[dict]:
     return get_market_data()
 
 
-def load_latest_recommendations(limit: int = 5) -> tuple[list[Recommendation], str | None]:
+def load_recommendation_dates(limit: int = 7) -> tuple[list[str], str | None]:
     if not DB_PATH.exists():
         return [], f"DB 파일을 찾을 수 없습니다: {DB_PATH}"
 
     try:
         with sqlite3.connect(DB_PATH) as connection:
             connection.row_factory = sqlite3.Row
+            rows = connection.execute(
+                """
+                SELECT run_date
+                FROM recommendations
+                GROUP BY run_date
+                ORDER BY run_date DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+    except sqlite3.Error as exc:
+        return [], f"DB 날짜 조회 실패: {exc}"
+
+    return [str(row["run_date"]) for row in rows if row["run_date"]], None
+
+
+def load_recommendations(
+    selected_date: str | None = None,
+    limit: int = 5,
+) -> tuple[list[Recommendation], str | None, str | None]:
+    if not DB_PATH.exists():
+        return [], None, f"DB 파일을 찾을 수 없습니다: {DB_PATH}"
+
+    try:
+        with sqlite3.connect(DB_PATH) as connection:
+            connection.row_factory = sqlite3.Row
+            if selected_date is None:
+                latest_date = connection.execute(
+                    "SELECT MAX(run_date) AS run_date FROM recommendations"
+                ).fetchone()
+                selected_date = latest_date["run_date"] if latest_date else None
+
+            if not selected_date:
+                return [], None, None
+
             latest = connection.execute(
-                "SELECT MAX(created_at) AS created_at FROM recommendations"
+                """
+                SELECT MAX(created_at) AS created_at
+                FROM recommendations
+                WHERE run_date = ?
+                """,
+                (selected_date,),
             ).fetchone()
             latest_created_at = latest["created_at"] if latest else None
             if not latest_created_at:
-                return [], None
+                return [], selected_date, None
 
             rows = connection.execute(
                 """
                 SELECT run_date, market, ticker, name, rank, score, reason, theme, created_at
                 FROM recommendations
-                WHERE created_at = ?
+                WHERE run_date = ? AND created_at = ?
                 ORDER BY rank ASC, score DESC
                 LIMIT ?
                 """,
-                (latest_created_at, limit),
+                (selected_date, latest_created_at, limit),
             ).fetchall()
     except sqlite3.Error as exc:
-        return [], f"DB 조회 실패: {exc}"
+        return [], selected_date, f"DB 조회 실패: {exc}"
 
-    return [
+    recommendations = [
         Recommendation(
             run_date=str(row["run_date"] or ""),
             market=str(row["market"] or ""),
@@ -249,7 +289,8 @@ def load_latest_recommendations(limit: int = 5) -> tuple[list[Recommendation], s
             created_at=str(row["created_at"] or ""),
         )
         for row in rows
-    ], None
+    ]
+    return recommendations, selected_date, None
 
 
 def esc(value: object) -> str:
@@ -314,8 +355,27 @@ def render_empty_card(message: str) -> str:
     """
 
 
-def render_dashboard() -> str:
-    recommendations, db_error = load_latest_recommendations()
+def render_date_buttons(dates: list[str], selected_date: str | None) -> str:
+    if not dates:
+        return ""
+
+    buttons = []
+    for run_date in dates:
+        active = " active" if run_date == selected_date else ""
+        buttons.append(
+            f'<a class="date-button{active}" href="/?date={esc(run_date)}">{esc(run_date)}</a>'
+        )
+
+    return f"""
+      <nav class="date-nav" aria-label="추천 날짜 선택">
+        {''.join(buttons)}
+      </nav>
+    """
+
+
+def render_dashboard(selected_date: str | None = None) -> str:
+    available_dates, date_error = load_recommendation_dates()
+    recommendations, resolved_date, db_error = load_recommendations(selected_date)
     high_conviction = [item for item in recommendations if item.score >= 70]
     watchlist = recommendations[:5]
     latest_run = recommendations[0].created_at if recommendations else get_kst_timestamp()
@@ -332,9 +392,11 @@ def render_dashboard() -> str:
     watch_cards = (
         "\n".join(render_stock_card(item) for item in watchlist)
         if watchlist
-        else render_empty_card("표시할 최신 추천 데이터가 없습니다.")
+        else render_empty_card("해당 날짜 추천 데이터가 없습니다")
     )
-    db_notice = f'<div class="db-notice">{esc(db_error)}</div>' if db_error else ""
+    notices = [error for error in (date_error, db_error) if error]
+    db_notice = "".join(f'<div class="db-notice">{esc(error)}</div>' for error in notices)
+    date_buttons = render_date_buttons(available_dates, resolved_date)
 
     return f"""<!doctype html>
 <html lang="ko">
@@ -405,6 +467,31 @@ def render_dashboard() -> str:
       color: var(--muted);
       font-size: 13px;
       line-height: 1.65;
+    }}
+    .date-nav {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 16px;
+    }}
+    .date-button {{
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 32px;
+      padding: 7px 11px;
+      border: 1px solid rgba(39,184,238,.22);
+      border-radius: 999px;
+      color: #9fdfff;
+      background: rgba(39,184,238,.07);
+      font-size: 12px;
+      font-weight: 800;
+      text-decoration: none;
+    }}
+    .date-button.active {{
+      color: #04100b;
+      border-color: rgba(73,224,154,.65);
+      background: var(--green);
     }}
     .content {{
       display: grid;
@@ -615,6 +702,8 @@ def render_dashboard() -> str:
       h1 {{ margin-bottom: 8px; font-size: 34px; }}
       .hero-meta {{ gap: 7px; font-size: 12px; }}
       .hero-note {{ margin-top: 10px; font-size: 12px; line-height: 1.5; }}
+      .date-nav {{ gap: 6px; margin-top: 12px; }}
+      .date-button {{ min-height: 30px; padding: 6px 9px; font-size: 11px; }}
       .content {{ gap: 14px; margin-top: 14px; }}
       .section {{ padding: 14px; }}
       .section-head {{ align-items: flex-start; flex-direction: column; gap: 9px; margin-bottom: 12px; }}
@@ -663,8 +752,10 @@ def render_dashboard() -> str:
       <h1>오늘의 관심종목</h1>
       <div class="hero-meta">
         <span>기준시각: <strong>{esc(get_kst_timestamp())}</strong></span>
+        <span>선택 날짜: <strong>{esc(resolved_date or "N/A")}</strong></span>
         <span>최신 저장시각: <strong>{esc(latest_run)}</strong></span>
       </div>
+      {date_buttons}
       <p class="hero-note">SQLite 추천 데이터와 시장 지표를 한 화면에서 확인하는 서버용 FastAPI 대시보드입니다.</p>
     </header>
 
@@ -709,5 +800,5 @@ def render_dashboard() -> str:
 
 
 @app.get("/", response_class=HTMLResponse)
-def dashboard() -> HTMLResponse:
-    return HTMLResponse(render_dashboard())
+def dashboard(date: str | None = Query(default=None)) -> HTMLResponse:
+    return HTMLResponse(render_dashboard(date))
