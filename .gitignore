@@ -2,3 +2,9 @@ venv/
 __pycache__/
 *.log
 .env
+data/*.db
+telegram_bot.lock
+dashboard.png
+results.csv
+market-data.json
+dashboard-data.json
