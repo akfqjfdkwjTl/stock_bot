@@ -102,6 +102,16 @@ def _recommendation_reason(item: dict) -> str:
     return reason
 
 
+def _price_at_pick(item: dict) -> float | None:
+    price = item.get("price_at_pick", item.get("current_price"))
+    if price in (None, ""):
+        return None
+    try:
+        return float(price)
+    except (TypeError, ValueError):
+        return None
+
+
 def save_recommendations(
     grade_a_items: list[dict],
     watch_items: list[dict],
@@ -129,7 +139,7 @@ def save_recommendations(
                 _recommendation_reason(item),
                 item.get("theme", ""),
                 item.get("sector_group", item.get("theme", "")),
-                item.get("current_price"),
+                _price_at_pick(item),
                 created_at,
             )
         )
@@ -147,7 +157,7 @@ def save_recommendations(
                 _recommendation_reason(item),
                 item.get("theme", ""),
                 item.get("sector_group", item.get("theme", "")),
-                item.get("current_price"),
+                _price_at_pick(item),
                 created_at,
             )
         )

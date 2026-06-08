@@ -13,6 +13,8 @@ import requests
 from fastapi import FastAPI, Query
 from fastapi.responses import HTMLResponse
 
+from db import init_db
+
 
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR / "data" / "stock_bot.db"
@@ -31,6 +33,7 @@ class Recommendation:
     score: float
     reason: str
     theme: str
+    price_at_pick: float | None
     created_at: str
 
 
@@ -96,12 +99,25 @@ def _format_price(value: float) -> str:
     return f"{value:,.0f}원"
 
 
+def _format_pick_price(value: float | None) -> str:
+    if value is None or value <= 0:
+        return "N/A"
+    return f"{value:,.0f}원"
+
+
+def _format_return(value: float | None) -> str:
+    if value is None:
+        return "N/A"
+    return f"{value:+.2f}%"
+
+
 def _format_volume(value: float) -> str:
     return f"{int(value):,}"
 
 
 def _empty_price_data() -> dict:
     return {
+        "current_price_value": None,
         "current_price": "N/A",
         "change_pct": "N/A",
         "change_direction": "neutral",
@@ -129,6 +145,7 @@ def _fetch_yfinance_price(symbol: str) -> dict | None:
     volume = float(latest_row["Volume"]) if "Volume" in latest_row else 0
     change_pct = (latest - previous) / previous * 100
     return {
+        "current_price_value": latest,
         "current_price": _format_price(latest),
         "change_pct": _format_change(change_pct),
         "change_direction": _change_direction(change_pct),
@@ -214,6 +231,7 @@ def load_recommendation_dates(limit: int = 7) -> tuple[list[str], str | None]:
         return [], f"DB 파일을 찾을 수 없습니다: {DB_PATH}"
 
     try:
+        init_db(DB_PATH)
         with sqlite3.connect(DB_PATH) as connection:
             connection.row_factory = sqlite3.Row
             rows = connection.execute(
@@ -240,6 +258,7 @@ def load_recommendations(
         return [], None, f"DB 파일을 찾을 수 없습니다: {DB_PATH}"
 
     try:
+        init_db(DB_PATH)
         with sqlite3.connect(DB_PATH) as connection:
             connection.row_factory = sqlite3.Row
             if selected_date is None:
@@ -269,6 +288,7 @@ def load_recommendations(
                 f"""
                 SELECT run_date, market, ticker, name, rank, score, reason,
                        {theme_expr} AS theme,
+                       price_at_pick,
                        created_at
                 FROM recommendations
                 WHERE run_date = ? AND created_at = ?
@@ -290,11 +310,50 @@ def load_recommendations(
             score=float(row["score"] or 0),
             reason=str(row["reason"] or ""),
             theme=str(row["theme"] or ""),
+            price_at_pick=float(row["price_at_pick"]) if row["price_at_pick"] not in (None, "") else None,
             created_at=str(row["created_at"] or ""),
         )
         for row in rows
     ]
     return recommendations, selected_date, None
+
+
+def calculate_return_pct(price_at_pick: float | None, current_price: float | None) -> float | None:
+    if price_at_pick is None or current_price is None or price_at_pick <= 0:
+        return None
+    return round((current_price - price_at_pick) / price_at_pick * 100, 2)
+
+
+def build_performance_rows(recommendations: list[Recommendation]) -> list[dict]:
+    rows: list[dict] = []
+    for item in recommendations:
+        price_data = get_stock_price_data(item.ticker)
+        current_price = price_data.get("current_price_value")
+        return_pct = calculate_return_pct(item.price_at_pick, current_price)
+        rows.append(
+            {
+                "item": item,
+                "price_data": price_data,
+                "return_pct": return_pct,
+                "return_direction": "neutral" if return_pct is None else _change_direction(return_pct),
+            }
+        )
+    return rows
+
+
+def summarize_performance(performance_rows: list[dict]) -> dict:
+    valid_returns = [row["return_pct"] for row in performance_rows if row["return_pct"] is not None]
+    winners = [value for value in valid_returns if value > 0]
+    losers = [value for value in valid_returns if value < 0]
+    average = round(sum(valid_returns) / len(valid_returns), 2) if valid_returns else None
+    win_rate = round(len(winners) / len(valid_returns) * 100) if valid_returns else None
+    return {
+        "count": len(performance_rows),
+        "average_return": average,
+        "win_rate": win_rate,
+        "winners": len(winners),
+        "losers": len(losers),
+    }
 
 
 def esc(value: object) -> str:
@@ -377,12 +436,77 @@ def render_date_buttons(dates: list[str], selected_date: str | None) -> str:
     """
 
 
+def render_stat_card(label: str, value: str, direction: str = "neutral") -> str:
+    return f"""
+      <div class="perf-stat">
+        <span>{esc(label)}</span>
+        <strong class="{esc(direction)}">{esc(value)}</strong>
+      </div>
+    """
+
+
+def render_performance_card(row: dict) -> str:
+    item: Recommendation = row["item"]
+    price_data = row["price_data"]
+    return_pct = row["return_pct"]
+    return_direction = row["return_direction"]
+    return f"""
+      <article class="performance-card">
+        <div>
+          <h3>{esc(item.name)}</h3>
+          <p>{esc(item.ticker)}</p>
+        </div>
+        <div class="performance-values">
+          <div><span>추천가</span><strong>{esc(_format_pick_price(item.price_at_pick))}</strong></div>
+          <div><span>현재가</span><strong>{esc(price_data["current_price"])}</strong></div>
+          <div><span>수익률</span><strong class="{esc(return_direction)}">{esc(_format_return(return_pct))}</strong></div>
+        </div>
+      </article>
+    """
+
+
+def render_performance_section(performance_rows: list[dict], selected_date: str | None) -> str:
+    if not performance_rows:
+        cards = render_empty_card("해당 날짜 추천 데이터가 없습니다")
+        summary_html = ""
+    else:
+        summary = summarize_performance(performance_rows)
+        average = _format_return(summary["average_return"])
+        average_direction = "neutral" if summary["average_return"] is None else _change_direction(summary["average_return"])
+        win_rate = "N/A" if summary["win_rate"] is None else f'{summary["win_rate"]}%'
+        summary_html = f"""
+        <div class="performance-summary">
+          {render_stat_card("추천수", str(summary["count"]))}
+          {render_stat_card("평균수익률", average, average_direction)}
+          {render_stat_card("승률", win_rate)}
+          {render_stat_card("수익 종목", str(summary["winners"]), "up")}
+          {render_stat_card("손실 종목", str(summary["losers"]), "down")}
+        </div>
+        """
+        cards = "\n".join(render_performance_card(row) for row in performance_rows)
+
+    return f"""
+      <section class="section">
+        <div class="section-head">
+          <div>
+            <p class="section-label">PERFORMANCE TRACKING</p>
+            <h2>{esc(selected_date or "N/A")} 추천 성과</h2>
+          </div>
+          <span class="badge green">현재가 기준 수익률</span>
+        </div>
+        {summary_html}
+        <div class="performance-grid">{cards}</div>
+      </section>
+    """
+
+
 def render_dashboard(selected_date: str | None = None) -> str:
     available_dates, date_error = load_recommendation_dates()
     recommendations, resolved_date, db_error = load_recommendations(selected_date)
     high_conviction = [item for item in recommendations if item.score >= 70]
     watchlist = recommendations[:5]
     latest_run = recommendations[0].created_at if recommendations else get_kst_timestamp()
+    performance_rows = build_performance_rows(watchlist)
 
     market_cards = "\n".join(
         render_market_card(item, index)
@@ -680,6 +804,88 @@ def render_dashboard(selected_date: str | None = None) -> str:
       font-size: 12px;
       line-height: 1.65;
     }}
+    .performance-summary {{
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 10px;
+      margin-bottom: 14px;
+    }}
+    .perf-stat {{
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(8,12,18,.55);
+    }}
+    .perf-stat span {{
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 800;
+    }}
+    .perf-stat strong {{
+      display: block;
+      margin-top: 8px;
+      color: var(--text);
+      font-size: 22px;
+      line-height: 1.1;
+    }}
+    .perf-stat strong.up,
+    .performance-values strong.up {{ color: var(--green); }}
+    .perf-stat strong.down,
+    .performance-values strong.down {{ color: var(--red); }}
+    .perf-stat strong.neutral,
+    .performance-values strong.neutral {{ color: var(--muted); }}
+    .performance-grid {{
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 12px;
+    }}
+    .performance-card {{
+      min-width: 0;
+      padding: 16px;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      background: linear-gradient(180deg, rgba(73,224,154,.08), rgba(12,17,25,.98) 42%), var(--panel-2);
+    }}
+    .performance-card h3 {{
+      margin: 0;
+      font-size: 18px;
+      line-height: 1.15;
+      overflow-wrap: anywhere;
+    }}
+    .performance-card p {{
+      margin: 5px 0 0;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 800;
+    }}
+    .performance-values {{
+      display: grid;
+      gap: 8px;
+      margin-top: 14px;
+    }}
+    .performance-values div {{
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 9px 8px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(8,12,18,.55);
+    }}
+    .performance-values span {{
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 800;
+      white-space: nowrap;
+    }}
+    .performance-values strong {{
+      color: var(--text);
+      font-size: 12px;
+      text-align: right;
+      white-space: nowrap;
+    }}
     .empty-card {{
       grid-column: 1 / -1;
       min-height: 84px;
@@ -698,6 +904,8 @@ def render_dashboard(selected_date: str | None = None) -> str:
     @media (max-width: 900px) {{
       .market-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
       .stock-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
+      .performance-summary {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
+      .performance-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
       .market-card-wide {{ grid-column: span 2; }}
     }}
     @media (max-width: 768px) {{
@@ -736,7 +944,12 @@ def render_dashboard(selected_date: str | None = None) -> str:
         line-height: 1.35;
       }}
       .stock-grid {{ grid-template-columns: 1fr; gap: 10px; }}
+      .performance-summary {{ grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }}
+      .perf-stat {{ padding: 11px; }}
+      .perf-stat strong {{ font-size: 18px; }}
+      .performance-grid {{ grid-template-columns: 1fr; gap: 10px; }}
       .stock-card, .empty-card {{ padding: 14px; }}
+      .performance-card {{ padding: 14px; }}
       .stock-card h3 {{ font-size: 18px; }}
       .stock-meta {{ margin: 12px 0; }}
       .stock-meta div {{ min-height: 48px; padding: 8px; }}
@@ -797,6 +1010,8 @@ def render_dashboard(selected_date: str | None = None) -> str:
         </div>
         <div class="stock-grid">{watch_cards}</div>
       </section>
+
+      {render_performance_section(performance_rows, resolved_date)}
     </main>
   </div>
 </body>

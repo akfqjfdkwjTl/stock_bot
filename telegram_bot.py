@@ -11,7 +11,7 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 from config import SETTINGS
-from main import VALID_STRATEGIES, generate_screening_message
+from main import VALID_STRATEGIES, build_performance_message, generate_screening_message
 from telegram_sender import split_message
 
 
@@ -118,7 +118,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await send_text_chunks(
         update,
         context,
-        "주식 추천 봇입니다. /recommend 입력 시 종목을 보내드립니다.",
+        "주식 추천 봇입니다. /recommend 입력 시 종목을 보내드립니다. /performance 또는 /perf 입력 시 최근 추천 성과를 조회합니다.",
     )
 
 
@@ -150,6 +150,18 @@ async def recommend_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await send_dashboard_screenshot(update, context)
 
 
+async def performance_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    selected_date = context.args[0].strip() if context.args else None
+    try:
+        result = build_performance_message(selected_date)
+    except Exception as exc:
+        logging.exception("Performance lookup failed")
+        await send_text_chunks(update, context, f"성과 조회 중 오류가 발생했습니다: {exc}")
+        return
+
+    await send_text_chunks(update, context, result)
+
+
 def main() -> None:
     if not SETTINGS.telegram_bot_token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN 환경 변수가 설정되지 않았습니다.")
@@ -159,6 +171,7 @@ def main() -> None:
     application = ApplicationBuilder().token(SETTINGS.telegram_bot_token).build()
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("recommend", recommend_command))
+    application.add_handler(CommandHandler(["performance", "perf"], performance_command))
 
     print("텔레그램 봇이 실행되었습니다. Ctrl+C 로 종료할 수 있습니다.")
     application.run_polling(drop_pending_updates=True)

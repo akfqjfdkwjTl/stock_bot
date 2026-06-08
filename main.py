@@ -770,6 +770,63 @@ def generate_screening_payload(
     return message, errors, display_items
 
 
+def build_performance_message(selected_date: Optional[str] = None) -> str:
+    """Return the latest recommendation performance summary without sending Telegram messages."""
+    from app import (
+        _format_pick_price,
+        _format_return,
+        build_performance_rows,
+        load_recommendations,
+        summarize_performance,
+    )
+
+    recommendations, resolved_date, db_error = load_recommendations(selected_date)
+    performance_rows = build_performance_rows(recommendations[: SETTINGS.final_recommendation_limit])
+
+    lines = [
+        "[추천 성과 추적]",
+        f"기준시각: {_format_kst_now()}",
+        f"조회일자: {resolved_date or 'N/A'}",
+        "",
+    ]
+
+    if db_error:
+        lines.append(f"DB 조회 오류: {db_error}")
+        return "\n".join(lines)
+
+    if not performance_rows:
+        lines.append("추천 성과 데이터가 없습니다.")
+        return "\n".join(lines)
+
+    summary = summarize_performance(performance_rows)
+    lines.extend(
+        [
+            f"추천수: {summary['count']}",
+            f"평균수익률: {_format_return(summary['average_return'])}",
+            f"승률: {'N/A' if summary['win_rate'] is None else str(summary['win_rate']) + '%'}",
+            f"수익 종목: {summary['winners']}",
+            f"손실 종목: {summary['losers']}",
+            "",
+            "종목별 성과",
+        ]
+    )
+
+    for index, row in enumerate(performance_rows, start=1):
+        item = row["item"]
+        price_data = row["price_data"]
+        lines.extend(
+            [
+                f"{index}. {item.name}",
+                f"추천가: {_format_pick_price(item.price_at_pick)}",
+                f"현재가: {price_data['current_price']}",
+                f"수익률: {_format_return(row['return_pct'])}",
+                "",
+            ]
+        )
+
+    return "\n".join(lines).rstrip()
+
+
 def main(mode: str = "real", strategy: Optional[str] = None) -> None:
     """전체 실행 흐름을 담당합니다."""
     try:
