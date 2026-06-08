@@ -277,6 +277,18 @@ def _grade_for_score(score: float) -> str:
     return "관찰"
 
 
+def _change_warning(change_pct: object) -> str:
+    try:
+        numeric_change = float(change_pct)
+    except (TypeError, ValueError):
+        return ""
+    if numeric_change >= 7:
+        return "주의: 당일 급등 후 추격매수 위험"
+    if numeric_change <= -5:
+        return "주의: 단기 낙폭 확대"
+    return ""
+
+
 def _can_add_candidate(
     candidate: dict,
     selected: list[dict],
@@ -286,8 +298,6 @@ def _can_add_candidate(
     if candidate["ticker"] in {row["ticker"] for row in selected}:
         return False
     if sector_counts.get(candidate["sector_group"], 0) >= 2:
-        return False
-    if industry_counts.get(candidate["industry_group"], 0) >= 2:
         return False
     return True
 
@@ -328,7 +338,6 @@ def _select_diversified_candidates(candidates: list[dict], limit: int) -> list[d
                         key=lambda pair: pair[1]["recommendation_score"],
                     )
                     if sector_counts[row["sector_group"]] > 1
-                    and industry_counts.get(candidate["industry_group"], 0) < 2
                 ),
                 None,
             )
@@ -495,6 +504,7 @@ def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dic
         enriched["sector_group"] = sector_group
         enriched["industry_group"] = industry_group
         enriched["theme"] = sector_group
+        enriched["change_warning"] = _change_warning(enriched.get("change_pct"))
         enriched["summary_reason"] = _summarize_recommendation_reason(enriched)
         all_candidates.append(enriched)
 
@@ -554,6 +564,8 @@ def _append_ranked_recommendations(
         )
         lines.append(f"현재가: {_format_currency(int(item.get('current_price') or 0))}")
         lines.append(f"등락률: {_format_change_pct(item.get('change_pct'))}")
+        if item.get("change_warning"):
+            lines.append(item["change_warning"])
         lines.append(
             f"이슈 요약: {item.get('issue_summary', '특이 이슈 없음 (기술적 흐름 기반)') or '특이 이슈 없음 (기술적 흐름 기반)'}"
         )
@@ -650,7 +662,7 @@ def build_message(
             lines,
             "관찰 후보",
             final_groups["watch"],
-            "50점 이상 관찰 후보 없음",
+            "관찰 후보 없음",
             next_index,
             "recommendation_score",
         )

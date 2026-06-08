@@ -94,6 +94,14 @@ def _ensure_column(
         connection.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
 
 
+def _recommendation_reason(item: dict) -> str:
+    reason = item.get("summary_reason") or item.get("issue_summary", "")
+    warning = item.get("change_warning", "")
+    if warning and warning not in reason:
+        return f"{reason} {warning}".strip()
+    return reason
+
+
 def save_recommendations(
     grade_a_items: list[dict],
     watch_items: list[dict],
@@ -118,7 +126,7 @@ def save_recommendations(
                 item["name"],
                 rank,
                 float(item.get("recommendation_score", item.get("final_score", 0))),
-                item.get("summary_reason") or item.get("issue_summary", ""),
+                _recommendation_reason(item),
                 item.get("theme", ""),
                 item.get("sector_group", item.get("theme", "")),
                 item.get("current_price"),
@@ -136,7 +144,7 @@ def save_recommendations(
                 item["name"],
                 rank,
                 float(item.get("recommendation_score", item.get("observation_score", item.get("final_score", 0)))),
-                item.get("summary_reason") or item.get("issue_summary", ""),
+                _recommendation_reason(item),
                 item.get("theme", ""),
                 item.get("sector_group", item.get("theme", "")),
                 item.get("current_price"),

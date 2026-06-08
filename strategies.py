@@ -588,11 +588,11 @@ def evaluate_mid_fallback(ticker: str, name: str, df: pd.DataFrame) -> Optional[
 
     latest = metrics["latest"]
 
-    if metrics["ma20_slope"] <= -0.01 or metrics["ma60_slope"] <= -0.05:
+    if metrics["ma20_slope"] <= -0.05 or metrics["ma60_slope"] <= -0.10:
         return None
-    if latest["종가"] <= latest["ma20"] * 0.98:
+    if latest["종가"] <= latest["ma60"] * 0.80:
         return None
-    if latest["종가"] < metrics["high60"] * 0.88:
+    if latest["종가"] < metrics["high60"] * 0.70:
         return None
 
     stop_price = latest["ma20"] * 0.96
@@ -607,7 +607,7 @@ def evaluate_mid_fallback(ticker: str, name: str, df: pd.DataFrame) -> Optional[
         "risk": _score_risk_reward(metrics, stop_price),
         "overheat": _score_not_overheated(metrics),
     }
-    if sum(score_parts.values()) < 40:
+    if sum(score_parts.values()) < 24:
         return None
 
     reasons = [
