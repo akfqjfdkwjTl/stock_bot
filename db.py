@@ -25,6 +25,8 @@ SCHEMA_STATEMENTS = (
         score REAL NOT NULL,
         reason TEXT,
         theme TEXT,
+        sector TEXT,
+        price_at_pick REAL,
         created_at TEXT NOT NULL
     )
     """,
@@ -75,8 +77,21 @@ def init_db(db_path: Path | str = DB_PATH) -> Path:
     with _connect(path) as connection:
         for statement in SCHEMA_STATEMENTS:
             connection.execute(statement)
+        _ensure_column(connection, "recommendations", "sector", "TEXT")
+        _ensure_column(connection, "recommendations", "price_at_pick", "REAL")
         connection.commit()
     return path
+
+
+def _ensure_column(
+    connection: sqlite3.Connection,
+    table_name: str,
+    column_name: str,
+    column_type: str,
+) -> None:
+    columns = {row[1] for row in connection.execute(f"PRAGMA table_info({table_name})")}
+    if column_name not in columns:
+        connection.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
 
 
 def save_recommendations(
@@ -102,9 +117,11 @@ def save_recommendations(
                 item["ticker"],
                 item["name"],
                 rank,
-                float(item.get("final_score", 0)),
+                float(item.get("recommendation_score", item.get("final_score", 0))),
                 item.get("summary_reason") or item.get("issue_summary", ""),
                 item.get("theme", ""),
+                item.get("sector_group", item.get("theme", "")),
+                item.get("current_price"),
                 created_at,
             )
         )
@@ -118,9 +135,11 @@ def save_recommendations(
                 item["ticker"],
                 item["name"],
                 rank,
-                float(item.get("observation_score", item.get("final_score", 0))),
+                float(item.get("recommendation_score", item.get("observation_score", item.get("final_score", 0)))),
                 item.get("summary_reason") or item.get("issue_summary", ""),
                 item.get("theme", ""),
+                item.get("sector_group", item.get("theme", "")),
+                item.get("current_price"),
                 created_at,
             )
         )
@@ -133,9 +152,9 @@ def save_recommendations(
         connection.executemany(
             """
             INSERT INTO recommendations (
-                run_date, market, ticker, name, rank, score, reason, theme, created_at
+                run_date, market, ticker, name, rank, score, reason, theme, sector, price_at_pick, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             rows,
         )

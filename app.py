@@ -262,10 +262,14 @@ def load_recommendations(
             latest_created_at = latest["created_at"] if latest else None
             if not latest_created_at:
                 return [], selected_date, None
+            columns = {row["name"] for row in connection.execute("PRAGMA table_info(recommendations)")}
+            theme_expr = "COALESCE(sector, theme)" if "sector" in columns else "theme"
 
             rows = connection.execute(
-                """
-                SELECT run_date, market, ticker, name, rank, score, reason, theme, created_at
+                f"""
+                SELECT run_date, market, ticker, name, rank, score, reason,
+                       {theme_expr} AS theme,
+                       created_at
                 FROM recommendations
                 WHERE run_date = ? AND created_at = ?
                 ORDER BY rank ASC, score DESC

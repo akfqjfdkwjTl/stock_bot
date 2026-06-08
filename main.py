@@ -37,6 +37,59 @@ SECTOR_GROUPS = {
     "전력": "전력",
     "2차전지": "2차전지",
     "지주회사": "지주회사",
+    "생활가전": "생활가전",
+    "전장": "전장",
+    "통신/AI": "통신/AI",
+}
+
+STOCK_MASTER_SECTORS = {
+    "086790": {"sector": "금융", "industry": "금융지주"},
+    "105560": {"sector": "금융", "industry": "금융지주"},
+    "055550": {"sector": "금융", "industry": "금융지주"},
+    "000810": {"sector": "금융", "industry": "보험"},
+    "032830": {"sector": "금융", "industry": "보험"},
+    "006260": {"sector": "전력", "industry": "전력기기"},
+    "011070": {"sector": "전장", "industry": "전자부품"},
+    "021240": {"sector": "생활가전", "industry": "렌탈/생활가전"},
+    "017670": {"sector": "통신/AI", "industry": "통신"},
+    "402340": {"sector": "반도체", "industry": "반도체지주"},
+    "009150": {"sector": "전자부품", "industry": "전자부품"},
+    "034730": {"sector": "지주회사", "industry": "지주회사"},
+    "005930": {"sector": "반도체", "industry": "반도체"},
+    "005935": {"sector": "반도체", "industry": "반도체"},
+    "000660": {"sector": "반도체", "industry": "반도체"},
+    "353200": {"sector": "반도체", "industry": "전자부품"},
+    "033780": {"sector": "소비재", "industry": "필수소비재"},
+    "259960": {"sector": "게임", "industry": "게임"},
+    "034020": {"sector": "전력", "industry": "전력/원전"},
+    "035420": {"sector": "AI/IT", "industry": "인터넷/플랫폼"},
+    "035720": {"sector": "AI/IT", "industry": "인터넷/플랫폼"},
+    "005380": {"sector": "자동차", "industry": "완성차"},
+    "012330": {"sector": "전장", "industry": "자동차부품"},
+    "068270": {"sector": "바이오", "industry": "바이오"},
+    "207940": {"sector": "바이오", "industry": "바이오"},
+}
+
+STOCK_MASTER_BY_NAME = {
+    "하나금융지주": STOCK_MASTER_SECTORS["086790"],
+    "KB금융": STOCK_MASTER_SECTORS["105560"],
+    "신한지주": STOCK_MASTER_SECTORS["055550"],
+    "삼성화재": STOCK_MASTER_SECTORS["000810"],
+    "삼성생명": STOCK_MASTER_SECTORS["032830"],
+    "LS": STOCK_MASTER_SECTORS["006260"],
+    "LG이노텍": STOCK_MASTER_SECTORS["011070"],
+    "코웨이": STOCK_MASTER_SECTORS["021240"],
+    "SK텔레콤": STOCK_MASTER_SECTORS["017670"],
+    "SK스퀘어": STOCK_MASTER_SECTORS["402340"],
+    "삼성전기": STOCK_MASTER_SECTORS["009150"],
+    "SK": STOCK_MASTER_SECTORS["034730"],
+    "두산에너빌리티": STOCK_MASTER_SECTORS["034020"],
+    "NAVER": STOCK_MASTER_SECTORS["035420"],
+    "카카오": STOCK_MASTER_SECTORS["035720"],
+    "현대차": STOCK_MASTER_SECTORS["005380"],
+    "현대모비스": STOCK_MASTER_SECTORS["012330"],
+    "셀트리온": STOCK_MASTER_SECTORS["068270"],
+    "삼성바이오로직스": STOCK_MASTER_SECTORS["207940"],
 }
 
 
@@ -68,6 +121,24 @@ def _normalize_sector(theme: str) -> str:
     """비슷한 테마를 하나의 섹터 그룹으로 정규화합니다."""
     normalized = (theme or "기타").strip()
     return SECTOR_GROUPS.get(normalized, normalized or "기타")
+
+
+def _resolve_master_classification(ticker: str, name: str, fallback_theme: str) -> tuple[str, str]:
+    """뉴스 테마보다 종목 고유 섹터/산업군을 우선 적용합니다."""
+    master = STOCK_MASTER_SECTORS.get(ticker) or STOCK_MASTER_BY_NAME.get(name)
+    if master:
+        return master["sector"], master["industry"]
+    sector = _normalize_sector(fallback_theme)
+    return sector, sector
+
+
+def _format_change_pct(value: object) -> str:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return "N/A"
+    sign = "+" if numeric > 0 else ""
+    return f"{sign}{numeric:.2f}%"
 
 
 def _filter_strategy_results(
@@ -198,6 +269,84 @@ def _calculate_observation_score(entry: dict) -> float:
     return round(score, 1)
 
 
+def _grade_for_score(score: float) -> str:
+    if score >= 70:
+        return "A"
+    if score >= 60:
+        return "B"
+    return "관찰"
+
+
+def _can_add_candidate(
+    candidate: dict,
+    selected: list[dict],
+    sector_counts: dict[str, int],
+    industry_counts: dict[str, int],
+) -> bool:
+    if candidate["ticker"] in {row["ticker"] for row in selected}:
+        return False
+    if sector_counts.get(candidate["sector_group"], 0) >= 2:
+        return False
+    if industry_counts.get(candidate["industry_group"], 0) >= 2:
+        return False
+    return True
+
+
+def _select_diversified_candidates(candidates: list[dict], limit: int) -> list[dict]:
+    """점수순을 유지하되 동일 섹터/산업군 쏠림을 제한합니다."""
+    eligible = list(candidates)
+    eligible.sort(key=lambda row: row["recommendation_score"], reverse=True)
+
+    selected: list[dict] = []
+    sector_counts: dict[str, int] = defaultdict(int)
+    industry_counts: dict[str, int] = defaultdict(int)
+
+    for candidate in eligible:
+        if len(selected) >= limit:
+            break
+        if not _can_add_candidate(candidate, selected, sector_counts, industry_counts):
+            continue
+        selected.append(candidate)
+        sector_counts[candidate["sector_group"]] += 1
+        industry_counts[candidate["industry_group"]] += 1
+
+    available_sectors = {row["sector_group"] for row in eligible}
+    target_sector_count = min(3, len(available_sectors), limit)
+    if len({row["sector_group"] for row in selected}) < target_sector_count:
+        selected_tickers = {row["ticker"] for row in selected}
+        selected_sectors = {row["sector_group"] for row in selected}
+        for candidate in eligible:
+            if len({row["sector_group"] for row in selected}) >= target_sector_count:
+                break
+            if candidate["ticker"] in selected_tickers or candidate["sector_group"] in selected_sectors:
+                continue
+            replace_index = next(
+                (
+                    index
+                    for index, row in sorted(
+                        enumerate(selected),
+                        key=lambda pair: pair[1]["recommendation_score"],
+                    )
+                    if sector_counts[row["sector_group"]] > 1
+                    and industry_counts.get(candidate["industry_group"], 0) < 2
+                ),
+                None,
+            )
+            if replace_index is None:
+                continue
+            removed = selected[replace_index]
+            sector_counts[removed["sector_group"]] -= 1
+            industry_counts[removed["industry_group"]] -= 1
+            selected[replace_index] = candidate
+            sector_counts[candidate["sector_group"]] += 1
+            industry_counts[candidate["industry_group"]] += 1
+            selected_tickers = {row["ticker"] for row in selected}
+            selected_sectors = {row["sector_group"] for row in selected}
+
+    selected.sort(key=lambda row: row["recommendation_score"], reverse=True)
+    return selected[:limit]
+
+
 def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dict[str, list[dict]]:
     """조건 → 필터 → 출력 순서로 A급/관찰 후보를 구성합니다."""
     merged_by_ticker: dict[str, dict] = {}
@@ -209,6 +358,7 @@ def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dic
                 "ticker": item["ticker"],
                 "name": item["name"],
                 "current_price": item["current_price"],
+                "change_pct": item.get("change_pct"),
                 "trading_value": item["trading_value"],
                 "theme": item.get("theme", "기타"),
                 "recent_news_keywords": item.get("recent_news_keywords", ""),
@@ -229,6 +379,7 @@ def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dic
         if item["total_score"] > entry["short_score"]:
             entry["short_score"] = item["total_score"]
             entry["current_price"] = item["current_price"]
+            entry["change_pct"] = item.get("change_pct", entry.get("change_pct"))
             entry["trading_value"] = max(entry["trading_value"], item["trading_value"])
             entry["vol_ratio"] = item.get("vol_ratio", entry["vol_ratio"])
             entry["vol5_ratio"] = item.get("vol5_ratio", entry["vol5_ratio"])
@@ -244,6 +395,7 @@ def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dic
                 "ticker": item["ticker"],
                 "name": item["name"],
                 "current_price": item["current_price"],
+                "change_pct": item.get("change_pct"),
                 "trading_value": item["trading_value"],
                 "theme": item.get("theme", "기타"),
                 "recent_news_keywords": item.get("recent_news_keywords", ""),
@@ -264,6 +416,7 @@ def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dic
         if item["total_score"] > entry["swing_score"]:
             entry["swing_score"] = item["total_score"]
             entry["current_price"] = item["current_price"]
+            entry["change_pct"] = item.get("change_pct", entry.get("change_pct"))
             entry["trading_value"] = max(entry["trading_value"], item["trading_value"])
             entry["vol_ratio"] = item.get("vol_ratio", entry["vol_ratio"])
             entry["vol5_ratio"] = item.get("vol5_ratio", entry["vol5_ratio"])
@@ -284,6 +437,7 @@ def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dic
                 "ticker": item["ticker"],
                 "name": item["name"],
                 "current_price": item["current_price"],
+                "change_pct": item.get("change_pct"),
                 "trading_value": item["trading_value"],
                 "theme": item.get("theme", "기타"),
                 "recent_news_keywords": item.get("recent_news_keywords", ""),
@@ -304,6 +458,7 @@ def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dic
         if item["total_score"] > entry["mid_score"]:
             entry["mid_score"] = item["total_score"]
             entry["current_price"] = item["current_price"]
+            entry["change_pct"] = item.get("change_pct", entry.get("change_pct"))
             entry["trading_value"] = max(entry["trading_value"], item["trading_value"])
             entry["theme"] = item.get("theme", entry["theme"])
             entry["recent_news_keywords"] = item.get("recent_news_keywords", entry["recent_news_keywords"])
@@ -329,32 +484,30 @@ def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dic
         enriched = dict(entry)
         enriched["final_score"] = round(final_score, 1)
         enriched["observation_score"] = round(observation_score, 1)
+        enriched["recommendation_score"] = round(observation_score, 1)
+        enriched["grade"] = _grade_for_score(enriched["recommendation_score"])
         enriched["strategy_type"] = strategy_type
-        enriched["sector_group"] = _normalize_sector(enriched.get("theme", "기타"))
+        sector_group, industry_group = _resolve_master_classification(
+            enriched["ticker"],
+            enriched["name"],
+            enriched.get("theme", "기타"),
+        )
+        enriched["sector_group"] = sector_group
+        enriched["industry_group"] = industry_group
+        enriched["theme"] = sector_group
         enriched["summary_reason"] = _summarize_recommendation_reason(enriched)
         all_candidates.append(enriched)
 
-    all_candidates.sort(key=lambda row: row["observation_score"], reverse=True)
-
-    a_candidates = [
-        row for row in all_candidates
-        if row["final_score"] >= SETTINGS.grade_a_threshold and _passes_vcp_gate(row)
-    ]
-    selected_a: list[dict] = []
-    used_sectors: set[str] = set()
-
-    _append_unique_sector(a_candidates, selected_a, used_sectors, SETTINGS.final_recommendation_limit)
-    selected_a_tickers = {row["ticker"] for row in selected_a}
-    selected_observation: list[dict] = []
-    _append_unique_ticker(
-        [row for row in all_candidates if row["ticker"] not in selected_a_tickers],
-        selected_observation,
-        SETTINGS.final_recommendation_limit,
-    )
+    selected = _select_diversified_candidates(all_candidates, SETTINGS.final_recommendation_limit)
+    selected_a = [row for row in selected if row["grade"] == "A"]
+    selected_b = [row for row in selected if row["grade"] == "B"]
+    selected_observation = [row for row in selected if row["grade"] == "관찰"]
 
     return {
         "grade_a": selected_a,
-        "grade_b": selected_observation,
+        "grade_b": selected_b,
+        "watch": selected_observation,
+        "selected": selected,
     }
 
 
@@ -399,6 +552,8 @@ def _append_ranked_recommendations(
             f"{current_index}. {item['name']} / {score_value}점 / "
             f"{item['sector_group']} / {item['strategy_type']}"
         )
+        lines.append(f"현재가: {_format_currency(int(item.get('current_price') or 0))}")
+        lines.append(f"등락률: {_format_change_pct(item.get('change_pct'))}")
         lines.append(
             f"이슈 요약: {item.get('issue_summary', '특이 이슈 없음 (기술적 흐름 기반)') or '특이 이슈 없음 (기술적 흐름 기반)'}"
         )
@@ -459,21 +614,45 @@ def build_message(
         final_groups = _build_final_recommendations(strategy_results)
         lines.append("최종 추천 결과")
         lines.append("")
-        next_index = _append_ranked_recommendations(
-            lines,
-            "A급 추천",
-            final_groups["grade_a"],
-            "현재 기준 A급 없음",
-            1,
-            "final_score",
-        )
+        next_index = 1
+        if final_groups["grade_a"]:
+            next_index = _append_ranked_recommendations(
+                lines,
+                "A급 추천",
+                final_groups["grade_a"],
+                None,
+                next_index,
+                "recommendation_score",
+            )
+        else:
+            lines.append("A급 추천")
+            lines.append("현재 기준 A급 없음")
+            lines.append("")
+            if final_groups["grade_b"]:
+                next_index = _append_ranked_recommendations(
+                    lines,
+                    "B급 추천",
+                    final_groups["grade_b"],
+                    None,
+                    next_index,
+                    "recommendation_score",
+                )
+        if final_groups["grade_a"] and final_groups["grade_b"]:
+            next_index = _append_ranked_recommendations(
+                lines,
+                "B급 추천",
+                final_groups["grade_b"],
+                None,
+                next_index,
+                "recommendation_score",
+            )
         _append_ranked_recommendations(
             lines,
             "관찰 후보",
-            final_groups["grade_b"],
-            None,
+            final_groups["watch"],
+            "50점 이상 관찰 후보 없음",
             next_index,
-            "observation_score",
+            "recommendation_score",
         )
         _append_dashboard_link(lines)
         return "\n".join(lines)
@@ -557,7 +736,7 @@ def generate_screening_payload(
         try:
             save_recommendations(
                 final_groups["grade_a"],
-                final_groups["grade_b"],
+                final_groups["grade_b"] + final_groups["watch"],
                 market="KR",
             )
         except Exception as exc:
@@ -568,13 +747,13 @@ def generate_screening_payload(
             mode=mode,
             generated_at=generated_at,
             grade_a_items=final_groups["grade_a"],
-            watch_items=final_groups["grade_b"],
+            watch_items=final_groups["grade_b"] + final_groups["watch"],
         )
         try:
             refresh_market_json()
         except Exception as exc:
             print(f"시장 지표 JSON 생성 실패: {exc}")
-        display_items = final_groups["grade_a"] + final_groups["grade_b"]
+        display_items = final_groups["selected"]
 
     return message, errors, display_items
 

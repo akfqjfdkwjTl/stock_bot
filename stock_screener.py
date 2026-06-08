@@ -35,6 +35,33 @@ SAMPLE_STOCKS: list[dict[str, str]] = [
     {"ticker": "034020", "name": "두산에너빌리티", "profile": "short"},
 ]
 
+FALLBACK_REAL_STOCKS: list[dict[str, str]] = [
+    {"Code": "005930", "Name": "삼성전자"},
+    {"Code": "000660", "Name": "SK하이닉스"},
+    {"Code": "009150", "Name": "삼성전기"},
+    {"Code": "011070", "Name": "LG이노텍"},
+    {"Code": "017670", "Name": "SK텔레콤"},
+    {"Code": "034730", "Name": "SK"},
+    {"Code": "402340", "Name": "SK스퀘어"},
+    {"Code": "006260", "Name": "LS"},
+    {"Code": "105560", "Name": "KB금융"},
+    {"Code": "055550", "Name": "신한지주"},
+    {"Code": "086790", "Name": "하나금융지주"},
+    {"Code": "000810", "Name": "삼성화재"},
+    {"Code": "032830", "Name": "삼성생명"},
+    {"Code": "021240", "Name": "코웨이"},
+    {"Code": "033780", "Name": "KT&G"},
+    {"Code": "259960", "Name": "크래프톤"},
+    {"Code": "353200", "Name": "대덕전자"},
+    {"Code": "034020", "Name": "두산에너빌리티"},
+    {"Code": "035420", "Name": "NAVER"},
+    {"Code": "035720", "Name": "카카오"},
+    {"Code": "005380", "Name": "현대차"},
+    {"Code": "012330", "Name": "현대모비스"},
+    {"Code": "068270", "Name": "셀트리온"},
+    {"Code": "207940", "Name": "삼성바이오로직스"},
+]
+
 
 def _normalize_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
     """FinanceDataReader 일봉을 전략 입력 형식으로 바꿉니다."""
@@ -186,6 +213,11 @@ def _select_real_symbols(listing_df: pd.DataFrame) -> pd.DataFrame:
     return data.reset_index(drop=True)
 
 
+def _fallback_real_symbols() -> pd.DataFrame:
+    """KRX listing endpoint 장애 시 사용하는 보수적인 대형주 후보군입니다."""
+    return pd.DataFrame(FALLBACK_REAL_STOCKS).head(SETTINGS.max_symbols)
+
+
 def _append_flat_row(flat_results: list[dict[str, Any]], strategy_name: str, row: dict[str, Any]) -> None:
     """CSV 저장용 행을 추가합니다."""
     flat_results.append(
@@ -233,10 +265,10 @@ def _run_real_screening(
 
     try:
         listing_df = fdr.StockListing("KRX")
+        target_symbols = _select_real_symbols(listing_df)
     except Exception as exc:
-        raise RuntimeError(f"KRX 종목 목록 조회 실패: {exc}") from exc
-
-    target_symbols = _select_real_symbols(listing_df)
+        print(f"KRX 종목 목록 조회 실패, fallback 후보군 사용: {exc}")
+        target_symbols = _fallback_real_symbols()
     if target_symbols.empty:
         raise RuntimeError("KRX 종목 목록이 비어 있습니다.")
 
