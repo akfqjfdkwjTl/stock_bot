@@ -226,7 +226,7 @@ def get_market_indicators() -> list[dict]:
     return get_market_data()
 
 
-def load_recommendation_dates(limit: int = 7) -> tuple[list[str], str | None]:
+def load_recommendation_dates(limit: int | None = 7) -> tuple[list[str], str | None]:
     if not DB_PATH.exists():
         return [], f"DB 파일을 찾을 수 없습니다: {DB_PATH}"
 
@@ -235,14 +235,16 @@ def load_recommendation_dates(limit: int = 7) -> tuple[list[str], str | None]:
         with sqlite3.connect(DB_PATH) as connection:
             connection.row_factory = sqlite3.Row
             rows = connection.execute(
-                """
+                (
+                    """
                 SELECT run_date
                 FROM recommendations
                 GROUP BY run_date
                 ORDER BY run_date DESC
-                LIMIT ?
-                """,
-                (limit,),
+                    """
+                    + ("" if limit is None else " LIMIT ?")
+                ),
+                () if limit is None else (limit,),
             ).fetchall()
     except sqlite3.Error as exc:
         return [], f"DB 날짜 조회 실패: {exc}"
@@ -436,6 +438,63 @@ def render_date_buttons(dates: list[str], selected_date: str | None) -> str:
     """
 
 
+def render_date_controls(
+    recent_dates: list[str],
+    all_dates: list[str],
+    selected_date: str | None,
+) -> str:
+    if not recent_dates and not all_dates:
+        return ""
+
+    buttons = []
+    for run_date in recent_dates:
+        active = " active" if run_date == selected_date else ""
+        buttons.append(
+            f'<a class="date-button{active}" href="/?date={esc(run_date)}">{esc(run_date)}</a>'
+        )
+
+    date_options = "".join(f'<option value="{esc(run_date)}"></option>' for run_date in all_dates)
+    min_date = min(all_dates) if all_dates else ""
+    max_date = max(all_dates) if all_dates else ""
+    selected_value = selected_date or max_date
+    quick_dates = "".join(buttons) or '<span class="date-help">최근 추천 날짜가 없습니다</span>'
+    available_dates = ", ".join(all_dates[:12])
+    if len(all_dates) > 12:
+        available_dates += f" 외 {len(all_dates) - 12}개"
+    date_help = f"추천 데이터 보유 날짜 {len(all_dates)}개"
+    if available_dates:
+        date_help += f": {available_dates}"
+
+    return f"""
+      <section class="date-panel" aria-label="추천 날짜 조회">
+        <div class="date-panel-block">
+          <span class="date-label">최근 날짜</span>
+          <nav class="date-nav" aria-label="최근 추천 날짜 빠른 조회">
+            {quick_dates}
+          </nav>
+        </div>
+        <form class="date-picker-form" action="/" method="get">
+          <label for="history-date">달력</label>
+          <div class="date-picker-row">
+            <input
+              id="history-date"
+              name="date"
+              type="date"
+              value="{esc(selected_value)}"
+              min="{esc(min_date)}"
+              max="{esc(max_date)}"
+              list="recommendation-dates"
+              data-available-dates="{esc('|'.join(all_dates))}"
+              aria-describedby="date-picker-help"
+            >
+            <datalist id="recommendation-dates">{date_options}</datalist>
+          </div>
+          <p id="date-picker-help">{esc(date_help)}</p>
+        </form>
+      </section>
+    """
+
+
 def render_stat_card(label: str, value: str, direction: str = "neutral") -> str:
     return f"""
       <div class="perf-stat">
@@ -501,7 +560,8 @@ def render_performance_section(performance_rows: list[dict], selected_date: str 
 
 
 def render_dashboard(selected_date: str | None = None) -> str:
-    available_dates, date_error = load_recommendation_dates()
+    recent_dates, date_error = load_recommendation_dates(7)
+    all_dates, all_date_error = load_recommendation_dates(None)
     recommendations, resolved_date, db_error = load_recommendations(selected_date)
     high_conviction = [item for item in recommendations if item.score >= 70]
     watchlist = recommendations[:5]
@@ -522,9 +582,9 @@ def render_dashboard(selected_date: str | None = None) -> str:
         if watchlist
         else render_empty_card("해당 날짜 추천 데이터가 없습니다")
     )
-    notices = [error for error in (date_error, db_error) if error]
+    notices = [error for error in (date_error, all_date_error, db_error) if error]
     db_notice = "".join(f'<div class="db-notice">{esc(error)}</div>' for error in notices)
-    date_buttons = render_date_buttons(available_dates, resolved_date)
+    date_controls = render_date_controls(recent_dates, all_dates, resolved_date)
 
     return f"""<!doctype html>
 <html lang="ko">
@@ -596,11 +656,34 @@ def render_dashboard(selected_date: str | None = None) -> str:
       font-size: 13px;
       line-height: 1.65;
     }}
+    .date-panel {{
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(220px, 300px);
+      gap: 14px;
+      align-items: end;
+      margin-top: 16px;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(8,12,18,.45);
+    }}
+    .date-panel-block {{
+      min-width: 0;
+    }}
+    .date-label,
+    .date-picker-form label {{
+      display: block;
+      margin-bottom: 8px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 900;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }}
     .date-nav {{
       display: flex;
       flex-wrap: wrap;
       gap: 8px;
-      margin-top: 16px;
     }}
     .date-button {{
       display: inline-flex;
@@ -620,6 +703,46 @@ def render_dashboard(selected_date: str | None = None) -> str:
       color: #04100b;
       border-color: rgba(73,224,154,.65);
       background: var(--green);
+    }}
+    .date-picker-form {{
+      min-width: 0;
+      margin: 0;
+    }}
+    .date-picker-row {{
+      position: relative;
+    }}
+    .date-picker-row::before {{
+      content: "📅";
+      position: absolute;
+      left: 12px;
+      top: 50%;
+      transform: translateY(-50%);
+      pointer-events: none;
+      font-size: 15px;
+    }}
+    .date-picker-row input {{
+      width: 100%;
+      min-height: 40px;
+      padding: 9px 11px 9px 36px;
+      border: 1px solid rgba(39,184,238,.28);
+      border-radius: 8px;
+      color: var(--text);
+      background: rgba(16,22,34,.95);
+      font: inherit;
+      font-size: 13px;
+      font-weight: 800;
+      color-scheme: dark;
+    }}
+    .date-picker-row input:focus {{
+      outline: 2px solid rgba(39,184,238,.35);
+      outline-offset: 2px;
+    }}
+    .date-help,
+    #date-picker-help {{
+      margin: 8px 0 0;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.45;
     }}
     .content {{
       display: grid;
@@ -914,8 +1037,16 @@ def render_dashboard(selected_date: str | None = None) -> str:
       h1 {{ margin-bottom: 8px; font-size: 34px; }}
       .hero-meta {{ gap: 7px; font-size: 12px; }}
       .hero-note {{ margin-top: 10px; font-size: 12px; line-height: 1.5; }}
-      .date-nav {{ gap: 6px; margin-top: 12px; }}
+      .date-panel {{
+        grid-template-columns: 1fr;
+        gap: 12px;
+        margin-top: 12px;
+        padding: 12px;
+      }}
+      .date-nav {{ gap: 6px; }}
       .date-button {{ min-height: 30px; padding: 6px 9px; font-size: 11px; }}
+      .date-picker-row input {{ min-height: 38px; font-size: 12px; }}
+      #date-picker-help {{ font-size: 10px; }}
       .content {{ gap: 14px; margin-top: 14px; }}
       .section {{ padding: 14px; }}
       .section-head {{ align-items: flex-start; flex-direction: column; gap: 9px; margin-bottom: 12px; }}
@@ -972,7 +1103,7 @@ def render_dashboard(selected_date: str | None = None) -> str:
         <span>선택 날짜: <strong>{esc(resolved_date or "N/A")}</strong></span>
         <span>최신 저장시각: <strong>{esc(latest_run)}</strong></span>
       </div>
-      {date_buttons}
+      {date_controls}
       <p class="hero-note">SQLite 추천 데이터와 시장 지표를 한 화면에서 확인하는 서버용 FastAPI 대시보드입니다.</p>
     </header>
 
@@ -1014,6 +1145,16 @@ def render_dashboard(selected_date: str | None = None) -> str:
       {render_performance_section(performance_rows, resolved_date)}
     </main>
   </div>
+  <script>
+  const historyDateInput = document.getElementById("history-date");
+  if (historyDateInput) {{
+    historyDateInput.addEventListener("change", () => {{
+      if (historyDateInput.value) {{
+        window.location.href = `/?date=${{encodeURIComponent(historyDateInput.value)}}`;
+      }}
+    }});
+  }}
+  </script>
 </body>
 </html>"""
 
