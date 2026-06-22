@@ -232,8 +232,9 @@ def _collect_relevant_news_items(stock_name: str, items: list[dict[str, str]]) -
 
 def _format_news_item(item: dict[str, str]) -> dict[str, str]:
     title = unescape(item.get("title", "")).strip()
+    source = ""
     if " - " in title:
-        title = title.rsplit(" - ", 1)[0].strip()
+        title, source = [part.strip() for part in title.rsplit(" - ", 1)]
     published_date = ""
     try:
         published = parsedate_to_datetime(item.get("pubDate", ""))
@@ -242,6 +243,7 @@ def _format_news_item(item: dict[str, str]) -> dict[str, str]:
         pass
     return {
         "title": title,
+        "source": source,
         "url": item.get("link", "").strip(),
         "date": published_date,
     }

@@ -532,6 +532,7 @@ def render_stock_card(item: Recommendation, *, featured: bool = False) -> str:
     change_direction = price_data["change_direction"]
     news_html = render_news_items(item.news_items)
     score_html = render_score_detail(item.score_detail, item.score)
+    evidence_dialog = render_evidence_dialog(item)
     return f"""
       <article class="stock-card{featured_class}">
         <div class="card-top">
@@ -557,6 +558,7 @@ def render_stock_card(item: Recommendation, *, featured: bool = False) -> str:
         </div>
         {news_html}
         {score_html}
+        {evidence_dialog}
       </article>
     """
 
@@ -574,13 +576,16 @@ def render_news_items(news_items: list[dict]) -> str:
             title_html = (
                 f'<a href="{esc(url)}" target="_blank" rel="noopener noreferrer">{esc(title)}</a>'
             )
+            link_html = f'<a class="article-link" href="{esc(url)}" target="_blank" rel="noopener noreferrer">기사 보기</a>'
         else:
             title_html = esc(title)
+            link_html = '<em class="article-missing">기사 링크 없음</em>'
         links.append(
             f"""
             <li>
               <time>{esc(date_text)}</time>
               <p>{title_html}</p>
+              {link_html}
             </li>
             """
         )
@@ -589,6 +594,63 @@ def render_news_items(news_items: list[dict]) -> str:
         <span>최근 이슈</span>
         <ul>{''.join(links)}</ul>
       </div>
+    """
+
+
+def render_evidence_dialog(item: Recommendation) -> str:
+    if not item.news_items and not item.score_detail:
+        return ""
+
+    dialog_id = f"evidence-{esc(item.ticker)}-{item.id}"
+    article_rows = []
+    for article in item.news_items[:3]:
+        title = article.get("title") or "기사 제목 없음"
+        source = article.get("source") or "언론사 미상"
+        date_text = article.get("date") or "날짜 미상"
+        url = article.get("url") or ""
+        link = (
+            f'<a href="{esc(url)}" target="_blank" rel="noopener noreferrer">원문 보기</a>'
+            if url
+            else '<em>기사 링크 없음</em>'
+        )
+        article_rows.append(
+            f"""
+            <li>
+              <strong>{esc(title)}</strong>
+              <span>{esc(source)} · {esc(date_text)}</span>
+              {link}
+            </li>
+            """
+        )
+    if not article_rows:
+        article_rows.append("<li><em>저장된 기사 근거가 없습니다.</em></li>")
+
+    score_rows = []
+    for label, value in item.score_detail.items():
+        score_rows.append(f"<div><span>{esc(label)}</span><strong>{esc(value)}</strong></div>")
+    score_html = "".join(score_rows) or "<p>저장된 점수 근거가 없습니다.</p>"
+
+    return f"""
+      <button class="evidence-button" type="button" data-modal-target="{dialog_id}">근거 상세 보기</button>
+      <dialog class="evidence-dialog" id="{dialog_id}">
+        <div class="dialog-head">
+          <div>
+            <p class="section-label">RECOMMENDATION EVIDENCE</p>
+            <h3>{esc(item.name)} 추천 근거</h3>
+          </div>
+          <button type="button" class="dialog-close" data-modal-close aria-label="닫기">×</button>
+        </div>
+        <div class="dialog-body">
+          <section>
+            <h4>최근 이슈</h4>
+            <ul class="dialog-news">{''.join(article_rows)}</ul>
+          </section>
+          <section>
+            <h4>점수 근거</h4>
+            <div class="dialog-score">{score_html}</div>
+          </section>
+        </div>
+      </dialog>
     """
 
 
@@ -1203,6 +1265,19 @@ def render_dashboard(selected_date: str | None = None) -> str:
     .news-block a:hover {{
       color: #75d8ff;
     }}
+    .article-link,
+    .article-missing {{
+      display: inline-flex;
+      margin-top: 6px;
+      color: #75d8ff;
+      font-size: 10px;
+      font-weight: 900;
+      text-decoration: none;
+    }}
+    .article-missing {{
+      color: var(--muted);
+      font-style: normal;
+    }}
     .score-detail {{
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1227,6 +1302,132 @@ def render_dashboard(selected_date: str | None = None) -> str:
       margin-top: 5px;
       color: var(--text);
       font-size: 12px;
+    }}
+    .evidence-button {{
+      width: 100%;
+      min-height: 34px;
+      margin-top: 14px;
+      border: 1px solid rgba(39,184,238,.28);
+      border-radius: 8px;
+      color: #9fdfff;
+      background: rgba(39,184,238,.08);
+      font: inherit;
+      font-size: 12px;
+      font-weight: 900;
+      cursor: pointer;
+    }}
+    .evidence-button:hover {{
+      border-color: rgba(39,184,238,.48);
+      background: rgba(39,184,238,.14);
+    }}
+    .evidence-dialog {{
+      width: min(620px, calc(100% - 28px));
+      max-height: min(720px, calc(100vh - 40px));
+      padding: 0;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      color: var(--text);
+      background: #0b1119;
+      box-shadow: 0 30px 90px rgba(0,0,0,.65);
+    }}
+    .evidence-dialog::backdrop {{
+      background: rgba(0,0,0,.58);
+    }}
+    .dialog-head {{
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 18px;
+      border-bottom: 1px solid var(--line);
+      background: linear-gradient(180deg, rgba(39,184,238,.08), rgba(8,12,18,.2));
+    }}
+    .dialog-head h3 {{
+      margin: 4px 0 0;
+      font-size: 22px;
+      line-height: 1.15;
+    }}
+    .dialog-close {{
+      width: 34px;
+      height: 34px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      color: var(--text);
+      background: rgba(255,255,255,.05);
+      font-size: 24px;
+      line-height: 1;
+      cursor: pointer;
+    }}
+    .dialog-body {{
+      display: grid;
+      gap: 18px;
+      padding: 18px;
+      overflow: auto;
+    }}
+    .dialog-body h4 {{
+      margin: 0 0 10px;
+      color: #52d6ff;
+      font-size: 13px;
+    }}
+    .dialog-news {{
+      display: grid;
+      gap: 10px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }}
+    .dialog-news li {{
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(8,12,18,.55);
+    }}
+    .dialog-news strong,
+    .dialog-news span,
+    .dialog-news a,
+    .dialog-news em {{
+      display: block;
+    }}
+    .dialog-news strong {{
+      font-size: 13px;
+      line-height: 1.45;
+    }}
+    .dialog-news span {{
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 11px;
+    }}
+    .dialog-news a,
+    .dialog-news em {{
+      margin-top: 8px;
+      color: #75d8ff;
+      font-size: 12px;
+      font-style: normal;
+      font-weight: 900;
+      text-decoration: none;
+    }}
+    .dialog-news em {{ color: var(--muted); }}
+    .dialog-score {{
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }}
+    .dialog-score div {{
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(8,12,18,.55);
+    }}
+    .dialog-score span {{
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 800;
+    }}
+    .dialog-score strong {{
+      display: block;
+      margin-top: 6px;
+      font-size: 15px;
     }}
     .performance-summary {{
       display: grid;
@@ -1404,6 +1605,9 @@ def render_dashboard(selected_date: str | None = None) -> str:
       .news-block {{ margin-top: 12px; }}
       .news-block li {{ padding: 7px; }}
       .score-detail {{ grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin-top: 12px; }}
+      .dialog-head {{ padding: 14px; }}
+      .dialog-body {{ padding: 14px; }}
+      .dialog-score {{ grid-template-columns: 1fr; }}
     }}
     @media (max-width: 560px) {{
       .market-value-row strong,
@@ -1473,6 +1677,26 @@ def render_dashboard(selected_date: str | None = None) -> str:
       }}
     }});
   }}
+  document.querySelectorAll("[data-modal-target]").forEach((button) => {{
+    button.addEventListener("click", () => {{
+      const dialog = document.getElementById(button.dataset.modalTarget);
+      if (dialog && typeof dialog.showModal === "function") {{
+        dialog.showModal();
+      }}
+    }});
+  }});
+  document.querySelectorAll("[data-modal-close]").forEach((button) => {{
+    button.addEventListener("click", () => {{
+      button.closest("dialog")?.close();
+    }});
+  }});
+  document.querySelectorAll(".evidence-dialog").forEach((dialog) => {{
+    dialog.addEventListener("click", (event) => {{
+      if (event.target === dialog) {{
+        dialog.close();
+      }}
+    }});
+  }});
   </script>
 </body>
 </html>"""
