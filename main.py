@@ -804,14 +804,16 @@ def build_performance_message(selected_date: Optional[str] = None) -> str:
 
     def append_summary(title: str, rows: list[dict]) -> None:
         summary = summarize_performance(rows)
+        best_detail = _performance_detail(summary.get("best_row"))
+        worst_detail = _performance_detail(summary.get("worst_row"))
         lines.extend(
             [
                 title,
                 f"추천수: {summary['count']}",
                 f"승률: {_format_win_rate(summary['win_rate'])}",
                 f"평균수익률: {_format_return(summary['average_return'])}",
-                f"최고수익률: {_format_return(summary['best_return'])}",
-                f"최저수익률: {_format_return(summary['worst_return'])}",
+                f"최고수익률: {_format_return(summary['best_return'])}{best_detail}",
+                f"최저수익률: {_format_return(summary['worst_return'])}{worst_detail}",
                 f"수익 종목: {summary['winners']}",
                 f"손실 종목: {summary['losers']}",
                 f"계산 제외: {summary['excluded_count']}",
@@ -844,6 +846,13 @@ def build_performance_message(selected_date: Optional[str] = None) -> str:
         )
 
     return "\n".join(lines).rstrip()
+
+
+def _performance_detail(row: dict | None) -> str:
+    if not row:
+        return ""
+    item = row["item"]
+    return f" ({item.name}, {item.run_date})"
 
 
 def main(mode: str = "real", strategy: Optional[str] = None) -> None:

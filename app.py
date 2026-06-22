@@ -406,19 +406,24 @@ def build_performance_rows(recommendations: list[Recommendation], *, persist: bo
 
 
 def summarize_performance(performance_rows: list[dict]) -> dict:
-    valid_returns = [row["return_pct"] for row in performance_rows if row["return_pct"] is not None]
+    valid_rows = [row for row in performance_rows if row["return_pct"] is not None]
+    valid_returns = [row["return_pct"] for row in valid_rows]
     winners = [value for value in valid_returns if value > 0]
     losers = [value for value in valid_returns if value <= 0]
     average = round(sum(valid_returns) / len(valid_returns), 2) if valid_returns else None
     win_rate = round(len(winners) / len(valid_returns) * 100, 1) if valid_returns else None
+    best_row = max(valid_rows, key=lambda row: row["return_pct"], default=None)
+    worst_row = min(valid_rows, key=lambda row: row["return_pct"], default=None)
     return {
         "count": len(performance_rows),
         "valid_count": len(valid_returns),
         "excluded_count": len(performance_rows) - len(valid_returns),
         "average_return": average,
         "win_rate": win_rate,
-        "best_return": round(max(valid_returns), 2) if valid_returns else None,
-        "worst_return": round(min(valid_returns), 2) if valid_returns else None,
+        "best_return": round(best_row["return_pct"], 2) if best_row else None,
+        "worst_return": round(worst_row["return_pct"], 2) if worst_row else None,
+        "best_row": best_row,
+        "worst_row": worst_row,
         "winners": len(winners),
         "losers": len(losers),
     }
@@ -585,11 +590,13 @@ def render_date_controls(
     """
 
 
-def render_stat_card(label: str, value: str, direction: str = "neutral") -> str:
+def render_stat_card(label: str, value: str, direction: str = "neutral", detail: str = "") -> str:
+    detail_html = f"<small>{esc(detail)}</small>" if detail else ""
     return f"""
       <div class="perf-stat">
         <span>{esc(label)}</span>
         <strong class="{esc(direction)}">{esc(value)}</strong>
+        {detail_html}
       </div>
     """
 
@@ -604,19 +611,28 @@ def render_performance_summary_cards(summary: dict, *, scope_label: str) -> str:
     average_direction = "neutral" if summary["average_return"] is None else _change_direction(summary["average_return"])
     best_direction = "neutral" if summary["best_return"] is None else _change_direction(summary["best_return"])
     worst_direction = "neutral" if summary["worst_return"] is None else _change_direction(summary["worst_return"])
+    best_detail = _performance_extreme_detail(summary.get("best_row"))
+    worst_detail = _performance_extreme_detail(summary.get("worst_row"))
     return f"""
       <div class="performance-summary-title">{esc(scope_label)}</div>
       <div class="performance-summary">
         {render_stat_card("추천 수", str(summary["count"]))}
         {render_stat_card("승률", _format_win_rate(summary["win_rate"]))}
         {render_stat_card("평균 수익률", _format_return(summary["average_return"]), average_direction)}
-        {render_stat_card("최고 수익률", _format_return(summary["best_return"]), best_direction)}
-        {render_stat_card("최저 수익률", _format_return(summary["worst_return"]), worst_direction)}
+        {render_stat_card("최고 수익률", _format_return(summary["best_return"]), best_direction, best_detail)}
+        {render_stat_card("최저 수익률", _format_return(summary["worst_return"]), worst_direction, worst_detail)}
         {render_stat_card("수익 종목", str(summary["winners"]), "up")}
         {render_stat_card("손실 종목", str(summary["losers"]), "down")}
         {render_stat_card("계산 제외", str(summary["excluded_count"]))}
       </div>
     """
+
+
+def _performance_extreme_detail(row: dict | None) -> str:
+    if not row:
+        return ""
+    item: Recommendation = row["item"]
+    return f"{item.name} / {item.run_date}"
 
 
 def render_performance_card(row: dict) -> str:
@@ -1070,6 +1086,15 @@ def render_dashboard(selected_date: str | None = None) -> str:
       color: var(--text);
       font-size: 22px;
       line-height: 1.1;
+    }}
+    .perf-stat small {{
+      display: block;
+      margin-top: 7px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 800;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
     }}
     .perf-stat strong.up,
     .performance-values strong.up {{ color: var(--green); }}
