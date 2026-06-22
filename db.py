@@ -27,6 +27,7 @@ SCHEMA_STATEMENTS = (
         theme TEXT,
         sector TEXT,
         price_at_pick REAL,
+        price_date TEXT,
         current_price REAL,
         return_pct REAL,
         performance_updated_at TEXT,
@@ -82,6 +83,7 @@ def init_db(db_path: Path | str = DB_PATH) -> Path:
             connection.execute(statement)
         _ensure_column(connection, "recommendations", "sector", "TEXT")
         _ensure_column(connection, "recommendations", "price_at_pick", "REAL")
+        _ensure_column(connection, "recommendations", "price_date", "TEXT")
         _ensure_column(connection, "recommendations", "current_price", "REAL")
         _ensure_column(connection, "recommendations", "return_pct", "REAL")
         _ensure_column(connection, "recommendations", "performance_updated_at", "TEXT")
@@ -146,6 +148,7 @@ def save_recommendations(
                 item.get("theme", ""),
                 item.get("sector_group", item.get("theme", "")),
                 _price_at_pick(item),
+                item.get("price_date", ""),
                 _price_at_pick(item),
                 None,
                 None,
@@ -167,6 +170,7 @@ def save_recommendations(
                 item.get("theme", ""),
                 item.get("sector_group", item.get("theme", "")),
                 _price_at_pick(item),
+                item.get("price_date", ""),
                 _price_at_pick(item),
                 None,
                 None,
@@ -183,9 +187,9 @@ def save_recommendations(
             """
             INSERT INTO recommendations (
                 run_date, market, ticker, name, rank, score, reason, theme, sector,
-                price_at_pick, current_price, return_pct, performance_updated_at, created_at
+                price_at_pick, price_date, current_price, return_pct, performance_updated_at, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             rows,
         )

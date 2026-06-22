@@ -284,6 +284,7 @@ def _build_candidate(
         "name": name,
         "ticker": ticker,
         "current_price": int(latest["종가"]),
+        "price_date": str(latest.name.date() if hasattr(latest.name, "date") else latest.name),
         "change_pct": _safe_number(metrics["daily_change_pct"]),
         "trading_value": int(metrics["trading_value"]),
         "total_score": int(total_score),

@@ -367,6 +367,7 @@ def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dic
                 "ticker": item["ticker"],
                 "name": item["name"],
                 "current_price": item["current_price"],
+                "price_date": item.get("price_date", ""),
                 "change_pct": item.get("change_pct"),
                 "trading_value": item["trading_value"],
                 "theme": item.get("theme", "기타"),
@@ -388,6 +389,7 @@ def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dic
         if item["total_score"] > entry["short_score"]:
             entry["short_score"] = item["total_score"]
             entry["current_price"] = item["current_price"]
+            entry["price_date"] = item.get("price_date", entry.get("price_date", ""))
             entry["change_pct"] = item.get("change_pct", entry.get("change_pct"))
             entry["trading_value"] = max(entry["trading_value"], item["trading_value"])
             entry["vol_ratio"] = item.get("vol_ratio", entry["vol_ratio"])
@@ -404,6 +406,7 @@ def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dic
                 "ticker": item["ticker"],
                 "name": item["name"],
                 "current_price": item["current_price"],
+                "price_date": item.get("price_date", ""),
                 "change_pct": item.get("change_pct"),
                 "trading_value": item["trading_value"],
                 "theme": item.get("theme", "기타"),
@@ -425,6 +428,7 @@ def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dic
         if item["total_score"] > entry["swing_score"]:
             entry["swing_score"] = item["total_score"]
             entry["current_price"] = item["current_price"]
+            entry["price_date"] = item.get("price_date", entry.get("price_date", ""))
             entry["change_pct"] = item.get("change_pct", entry.get("change_pct"))
             entry["trading_value"] = max(entry["trading_value"], item["trading_value"])
             entry["vol_ratio"] = item.get("vol_ratio", entry["vol_ratio"])
@@ -446,6 +450,7 @@ def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dic
                 "ticker": item["ticker"],
                 "name": item["name"],
                 "current_price": item["current_price"],
+                "price_date": item.get("price_date", ""),
                 "change_pct": item.get("change_pct"),
                 "trading_value": item["trading_value"],
                 "theme": item.get("theme", "기타"),
@@ -467,6 +472,7 @@ def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dic
         if item["total_score"] > entry["mid_score"]:
             entry["mid_score"] = item["total_score"]
             entry["current_price"] = item["current_price"]
+            entry["price_date"] = item.get("price_date", entry.get("price_date", ""))
             entry["change_pct"] = item.get("change_pct", entry.get("change_pct"))
             entry["trading_value"] = max(entry["trading_value"], item["trading_value"])
             entry["theme"] = item.get("theme", entry["theme"])
@@ -839,6 +845,7 @@ def build_performance_message(selected_date: Optional[str] = None) -> str:
             [
                 f"{index}. {item.name}",
                 f"추천일: {item.run_date}",
+                f"가격기준일: {row.get('price_date') or 'N/A'}",
                 f"추천가: {_format_pick_price(item.price_at_pick)}",
                 f"현재가: {price_data['current_price']}",
                 f"수익률: {_format_return(row['return_pct'])}",
@@ -854,10 +861,11 @@ def _performance_detail(row: dict | None) -> str:
         return ""
     item = row["item"]
     price_data = row["price_data"]
+    price_date = row.get("price_date") or "N/A"
     from app import _format_pick_price
 
     return (
-        f" ({item.name}, 추천일 {item.run_date}, "
+        f" ({item.name}, 추천일 {item.run_date}, 가격기준일 {price_date}, "
         f"추천가 {_format_pick_price(item.price_at_pick)}, 현재가 {price_data['current_price']})"
     )
 

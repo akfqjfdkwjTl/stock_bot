@@ -36,6 +36,7 @@ class Recommendation:
     reason: str
     theme: str
     price_at_pick: float | None
+    price_date: str
     stored_current_price: float | None
     stored_return_pct: float | None
     performance_updated_at: str
@@ -297,6 +298,7 @@ def load_recommendations(
                 SELECT id, run_date, market, ticker, name, rank, score, reason,
                        {theme_expr} AS theme,
                        price_at_pick,
+                       price_date,
                        current_price,
                        return_pct,
                        performance_updated_at,
@@ -336,6 +338,7 @@ def _row_to_recommendation(row: sqlite3.Row) -> Recommendation:
         reason=str(row["reason"] or ""),
         theme=str(row["theme"] or ""),
         price_at_pick=_optional_float(row["price_at_pick"]),
+        price_date=str(row["price_date"] or ""),
         stored_current_price=_optional_float(row["current_price"]),
         stored_return_pct=_optional_float(row["return_pct"]),
         performance_updated_at=str(row["performance_updated_at"] or ""),
@@ -358,6 +361,7 @@ def load_all_recommendations() -> tuple[list[Recommendation], str | None]:
                 SELECT id, run_date, market, ticker, name, rank, score, reason,
                        {theme_expr} AS theme,
                        price_at_pick,
+                       price_date,
                        current_price,
                        return_pct,
                        performance_updated_at,
@@ -376,6 +380,33 @@ def calculate_return_pct(price_at_pick: float | None, current_price: float | Non
     if price_at_pick is None or current_price is None or price_at_pick <= 0:
         return None
     return round((current_price - price_at_pick) / price_at_pick * 100, 2)
+
+
+@lru_cache(maxsize=512)
+def infer_price_date(ticker: str, run_date: str, price_at_pick: float | None) -> str:
+    if not ticker or not run_date or price_at_pick is None:
+        return ""
+    try:
+        import yfinance as yf
+
+        run_dt = datetime.strptime(run_date, "%Y-%m-%d")
+        start = (run_dt - timedelta(days=10)).strftime("%Y-%m-%d")
+        end = (run_dt + timedelta(days=1)).strftime("%Y-%m-%d")
+        clean_ticker = "".join(ch for ch in ticker if ch.isdigit()).zfill(6)
+        history = yf.Ticker(f"{clean_ticker}.KS").history(start=start, end=end, interval="1d", auto_adjust=False)
+        closes = history["Close"].dropna()
+        if closes.empty:
+            return ""
+        matched = closes[(closes - float(price_at_pick)).abs() < 0.5]
+        if matched.empty:
+            return ""
+        return matched.index[-1].strftime("%Y-%m-%d")
+    except Exception:
+        return ""
+
+
+def get_price_basis_date(item: Recommendation) -> str:
+    return item.price_date or infer_price_date(item.ticker, item.run_date, item.price_at_pick)
 
 
 def build_performance_rows(recommendations: list[Recommendation], *, persist: bool = True) -> list[dict]:
@@ -398,6 +429,7 @@ def build_performance_rows(recommendations: list[Recommendation], *, persist: bo
             {
                 "item": item,
                 "price_data": price_data,
+                "price_date": get_price_basis_date(item),
                 "return_pct": return_pct,
                 "return_direction": "neutral" if return_pct is None else _change_direction(return_pct),
             }
@@ -633,8 +665,9 @@ def _performance_extreme_detail(row: dict | None) -> str:
         return ""
     item: Recommendation = row["item"]
     price_data = row["price_data"]
+    price_date = row.get("price_date") or "N/A"
     return (
-        f"{item.name} / 추천일 {item.run_date} / "
+        f"{item.name} / 추천일 {item.run_date} / 가격기준일 {price_date} / "
         f"추천가 {_format_pick_price(item.price_at_pick)} / 현재가 {price_data['current_price']}"
     )
 
@@ -642,6 +675,7 @@ def _performance_extreme_detail(row: dict | None) -> str:
 def render_performance_card(row: dict) -> str:
     item: Recommendation = row["item"]
     price_data = row["price_data"]
+    price_date = row.get("price_date") or "N/A"
     return_pct = row["return_pct"]
     return_direction = row["return_direction"]
     return f"""
@@ -652,6 +686,7 @@ def render_performance_card(row: dict) -> str:
         </div>
         <div class="performance-values">
           <div><span>추천일</span><strong>{esc(item.run_date)}</strong></div>
+          <div><span>가격기준일</span><strong>{esc(price_date)}</strong></div>
           <div><span>추천가</span><strong>{esc(_format_pick_price(item.price_at_pick))}</strong></div>
           <div><span>현재가</span><strong>{esc(price_data["current_price"])}</strong></div>
           <div><span>수익률</span><strong class="{esc(return_direction)}">{esc(_format_return(return_pct))}</strong></div>
