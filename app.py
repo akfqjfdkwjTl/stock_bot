@@ -5,7 +5,8 @@ from __future__ import annotations
 import html
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
+from functools import lru_cache
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -13,7 +14,7 @@ import requests
 from fastapi import FastAPI, Query
 from fastapi.responses import HTMLResponse
 
-from db import init_db
+from db import init_db, update_recommendation_performance
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -25,6 +26,7 @@ app = FastAPI(title="Stock Dashboard")
 
 @dataclass
 class Recommendation:
+    id: int
     run_date: str
     market: str
     ticker: str
@@ -34,6 +36,9 @@ class Recommendation:
     reason: str
     theme: str
     price_at_pick: float | None
+    stored_current_price: float | None
+    stored_return_pct: float | None
+    performance_updated_at: str
     created_at: str
 
 
@@ -153,6 +158,7 @@ def _fetch_yfinance_price(symbol: str) -> dict | None:
     }
 
 
+@lru_cache(maxsize=512)
 def get_stock_price_data(ticker: str) -> dict:
     """Fetch Korean stock price data. Try KOSPI first, then KOSDAQ."""
     clean_ticker = "".join(ch for ch in ticker if ch.isdigit()).zfill(6)
@@ -288,9 +294,12 @@ def load_recommendations(
 
             rows = connection.execute(
                 f"""
-                SELECT run_date, market, ticker, name, rank, score, reason,
+                SELECT id, run_date, market, ticker, name, rank, score, reason,
                        {theme_expr} AS theme,
                        price_at_pick,
+                       current_price,
+                       return_pct,
+                       performance_updated_at,
                        created_at
                 FROM recommendations
                 WHERE run_date = ? AND created_at = ?
@@ -302,22 +311,65 @@ def load_recommendations(
     except sqlite3.Error as exc:
         return [], selected_date, f"DB 조회 실패: {exc}"
 
-    recommendations = [
-        Recommendation(
-            run_date=str(row["run_date"] or ""),
-            market=str(row["market"] or ""),
-            ticker=str(row["ticker"] or ""),
-            name=str(row["name"] or ""),
-            rank=int(row["rank"] or 0),
-            score=float(row["score"] or 0),
-            reason=str(row["reason"] or ""),
-            theme=str(row["theme"] or ""),
-            price_at_pick=float(row["price_at_pick"]) if row["price_at_pick"] not in (None, "") else None,
-            created_at=str(row["created_at"] or ""),
-        )
-        for row in rows
-    ]
+    recommendations = [_row_to_recommendation(row) for row in rows]
     return recommendations, selected_date, None
+
+
+def _optional_float(value: object) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _row_to_recommendation(row: sqlite3.Row) -> Recommendation:
+    return Recommendation(
+        id=int(row["id"] or 0),
+        run_date=str(row["run_date"] or ""),
+        market=str(row["market"] or ""),
+        ticker=str(row["ticker"] or ""),
+        name=str(row["name"] or ""),
+        rank=int(row["rank"] or 0),
+        score=float(row["score"] or 0),
+        reason=str(row["reason"] or ""),
+        theme=str(row["theme"] or ""),
+        price_at_pick=_optional_float(row["price_at_pick"]),
+        stored_current_price=_optional_float(row["current_price"]),
+        stored_return_pct=_optional_float(row["return_pct"]),
+        performance_updated_at=str(row["performance_updated_at"] or ""),
+        created_at=str(row["created_at"] or ""),
+    )
+
+
+def load_all_recommendations() -> tuple[list[Recommendation], str | None]:
+    if not DB_PATH.exists():
+        return [], f"DB 파일을 찾을 수 없습니다: {DB_PATH}"
+
+    try:
+        init_db(DB_PATH)
+        with sqlite3.connect(DB_PATH) as connection:
+            connection.row_factory = sqlite3.Row
+            columns = {row["name"] for row in connection.execute("PRAGMA table_info(recommendations)")}
+            theme_expr = "COALESCE(sector, theme)" if "sector" in columns else "theme"
+            rows = connection.execute(
+                f"""
+                SELECT id, run_date, market, ticker, name, rank, score, reason,
+                       {theme_expr} AS theme,
+                       price_at_pick,
+                       current_price,
+                       return_pct,
+                       performance_updated_at,
+                       created_at
+                FROM recommendations
+                ORDER BY run_date DESC, created_at DESC, rank ASC
+                """
+            ).fetchall()
+    except sqlite3.Error as exc:
+        return [], f"DB 전체 성과 조회 실패: {exc}"
+
+    return [_row_to_recommendation(row) for row in rows], None
 
 
 def calculate_return_pct(price_at_pick: float | None, current_price: float | None) -> float | None:
@@ -326,12 +378,22 @@ def calculate_return_pct(price_at_pick: float | None, current_price: float | Non
     return round((current_price - price_at_pick) / price_at_pick * 100, 2)
 
 
-def build_performance_rows(recommendations: list[Recommendation]) -> list[dict]:
+def build_performance_rows(recommendations: list[Recommendation], *, persist: bool = True) -> list[dict]:
     rows: list[dict] = []
     for item in recommendations:
         price_data = get_stock_price_data(item.ticker)
         current_price = price_data.get("current_price_value")
         return_pct = calculate_return_pct(item.price_at_pick, current_price)
+        if persist and return_pct is not None:
+            try:
+                update_recommendation_performance(
+                    item.id,
+                    current_price=current_price,
+                    return_pct=return_pct,
+                    db_path=DB_PATH,
+                )
+            except Exception:
+                pass
         rows.append(
             {
                 "item": item,
@@ -346,16 +408,44 @@ def build_performance_rows(recommendations: list[Recommendation]) -> list[dict]:
 def summarize_performance(performance_rows: list[dict]) -> dict:
     valid_returns = [row["return_pct"] for row in performance_rows if row["return_pct"] is not None]
     winners = [value for value in valid_returns if value > 0]
-    losers = [value for value in valid_returns if value < 0]
+    losers = [value for value in valid_returns if value <= 0]
     average = round(sum(valid_returns) / len(valid_returns), 2) if valid_returns else None
-    win_rate = round(len(winners) / len(valid_returns) * 100) if valid_returns else None
+    win_rate = round(len(winners) / len(valid_returns) * 100, 1) if valid_returns else None
     return {
         "count": len(performance_rows),
+        "valid_count": len(valid_returns),
+        "excluded_count": len(performance_rows) - len(valid_returns),
         "average_return": average,
         "win_rate": win_rate,
+        "best_return": round(max(valid_returns), 2) if valid_returns else None,
+        "worst_return": round(min(valid_returns), 2) if valid_returns else None,
         "winners": len(winners),
         "losers": len(losers),
     }
+
+
+def _parse_run_date(value: str) -> datetime | None:
+    try:
+        return datetime.strptime(value, "%Y-%m-%d")
+    except ValueError:
+        return None
+
+
+def filter_recommendations_since(
+    recommendations: list[Recommendation],
+    *,
+    days: int,
+    reference_date: datetime | None = None,
+) -> list[Recommendation]:
+    if reference_date is None:
+        reference_date = datetime.now(KST).replace(tzinfo=None)
+    start_date = reference_date - timedelta(days=days - 1)
+    filtered = []
+    for item in recommendations:
+        run_date = _parse_run_date(item.run_date)
+        if run_date and run_date.date() >= start_date.date():
+            filtered.append(item)
+    return filtered
 
 
 def esc(value: object) -> str:
@@ -504,6 +594,31 @@ def render_stat_card(label: str, value: str, direction: str = "neutral") -> str:
     """
 
 
+def _format_win_rate(value: float | None) -> str:
+    if value is None:
+        return "N/A"
+    return f"{value:.1f}%"
+
+
+def render_performance_summary_cards(summary: dict, *, scope_label: str) -> str:
+    average_direction = "neutral" if summary["average_return"] is None else _change_direction(summary["average_return"])
+    best_direction = "neutral" if summary["best_return"] is None else _change_direction(summary["best_return"])
+    worst_direction = "neutral" if summary["worst_return"] is None else _change_direction(summary["worst_return"])
+    return f"""
+      <div class="performance-summary-title">{esc(scope_label)}</div>
+      <div class="performance-summary">
+        {render_stat_card("추천 수", str(summary["count"]))}
+        {render_stat_card("승률", _format_win_rate(summary["win_rate"]))}
+        {render_stat_card("평균 수익률", _format_return(summary["average_return"]), average_direction)}
+        {render_stat_card("최고 수익률", _format_return(summary["best_return"]), best_direction)}
+        {render_stat_card("최저 수익률", _format_return(summary["worst_return"]), worst_direction)}
+        {render_stat_card("수익 종목", str(summary["winners"]), "up")}
+        {render_stat_card("손실 종목", str(summary["losers"]), "down")}
+        {render_stat_card("계산 제외", str(summary["excluded_count"]))}
+      </div>
+    """
+
+
 def render_performance_card(row: dict) -> str:
     item: Recommendation = row["item"]
     price_data = row["price_data"]
@@ -524,24 +639,19 @@ def render_performance_card(row: dict) -> str:
     """
 
 
-def render_performance_section(performance_rows: list[dict], selected_date: str | None) -> str:
+def render_performance_section(
+    performance_rows: list[dict],
+    selected_date: str | None,
+    cumulative_rows: list[dict],
+) -> str:
+    cumulative_summary = summarize_performance(cumulative_rows)
+    cumulative_html = render_performance_summary_cards(cumulative_summary, scope_label="누적 성과")
     if not performance_rows:
         cards = render_empty_card("해당 날짜 추천 데이터가 없습니다")
-        summary_html = ""
+        summary_html = render_performance_summary_cards(summarize_performance([]), scope_label="선택 날짜 성과")
     else:
         summary = summarize_performance(performance_rows)
-        average = _format_return(summary["average_return"])
-        average_direction = "neutral" if summary["average_return"] is None else _change_direction(summary["average_return"])
-        win_rate = "N/A" if summary["win_rate"] is None else f'{summary["win_rate"]}%'
-        summary_html = f"""
-        <div class="performance-summary">
-          {render_stat_card("추천수", str(summary["count"]))}
-          {render_stat_card("평균수익률", average, average_direction)}
-          {render_stat_card("승률", win_rate)}
-          {render_stat_card("수익 종목", str(summary["winners"]), "up")}
-          {render_stat_card("손실 종목", str(summary["losers"]), "down")}
-        </div>
-        """
+        summary_html = render_performance_summary_cards(summary, scope_label="선택 날짜 성과")
         cards = "\n".join(render_performance_card(row) for row in performance_rows)
 
     return f"""
@@ -553,6 +663,7 @@ def render_performance_section(performance_rows: list[dict], selected_date: str 
           </div>
           <span class="badge green">현재가 기준 수익률</span>
         </div>
+        {cumulative_html}
         {summary_html}
         <div class="performance-grid">{cards}</div>
       </section>
@@ -563,10 +674,12 @@ def render_dashboard(selected_date: str | None = None) -> str:
     recent_dates, date_error = load_recommendation_dates(7)
     all_dates, all_date_error = load_recommendation_dates(None)
     recommendations, resolved_date, db_error = load_recommendations(selected_date)
+    all_recommendations, all_performance_error = load_all_recommendations()
     high_conviction = [item for item in recommendations if item.score >= 70]
     watchlist = recommendations[:5]
     latest_run = recommendations[0].created_at if recommendations else get_kst_timestamp()
     performance_rows = build_performance_rows(watchlist)
+    cumulative_rows = build_performance_rows(all_recommendations)
 
     market_cards = "\n".join(
         render_market_card(item, index)
@@ -582,7 +695,7 @@ def render_dashboard(selected_date: str | None = None) -> str:
         if watchlist
         else render_empty_card("해당 날짜 추천 데이터가 없습니다")
     )
-    notices = [error for error in (date_error, all_date_error, db_error) if error]
+    notices = [error for error in (date_error, all_date_error, db_error, all_performance_error) if error]
     db_notice = "".join(f'<div class="db-notice">{esc(error)}</div>' for error in notices)
     date_controls = render_date_controls(recent_dates, all_dates, resolved_date)
 
@@ -929,9 +1042,15 @@ def render_dashboard(selected_date: str | None = None) -> str:
     }}
     .performance-summary {{
       display: grid;
-      grid-template-columns: repeat(5, minmax(0, 1fr));
+      grid-template-columns: repeat(4, minmax(0, 1fr));
       gap: 10px;
-      margin-bottom: 14px;
+      margin-bottom: 16px;
+    }}
+    .performance-summary-title {{
+      margin: 16px 0 9px;
+      color: #52d6ff;
+      font-size: 12px;
+      font-weight: 900;
     }}
     .perf-stat {{
       padding: 14px;
@@ -1142,7 +1261,7 @@ def render_dashboard(selected_date: str | None = None) -> str:
         <div class="stock-grid">{watch_cards}</div>
       </section>
 
-      {render_performance_section(performance_rows, resolved_date)}
+      {render_performance_section(performance_rows, resolved_date, cumulative_rows)}
     </main>
   </div>
   <script>

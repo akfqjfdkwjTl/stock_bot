@@ -775,13 +775,20 @@ def build_performance_message(selected_date: Optional[str] = None) -> str:
     from app import (
         _format_pick_price,
         _format_return,
+        _format_win_rate,
         build_performance_rows,
+        filter_recommendations_since,
+        load_all_recommendations,
         load_recommendations,
         summarize_performance,
     )
 
     recommendations, resolved_date, db_error = load_recommendations(selected_date)
+    all_recommendations, all_error = load_all_recommendations()
     performance_rows = build_performance_rows(recommendations[: SETTINGS.final_recommendation_limit])
+    cumulative_rows = build_performance_rows(all_recommendations)
+    recent_7_rows = build_performance_rows(filter_recommendations_since(all_recommendations, days=7))
+    recent_30_rows = build_performance_rows(filter_recommendations_since(all_recommendations, days=30))
 
     lines = [
         "[추천 성과 추적]",
@@ -790,26 +797,38 @@ def build_performance_message(selected_date: Optional[str] = None) -> str:
         "",
     ]
 
-    if db_error:
-        lines.append(f"DB 조회 오류: {db_error}")
+    errors = [error for error in (db_error, all_error) if error]
+    if errors:
+        lines.append(f"DB 조회 오류: {' / '.join(errors)}")
         return "\n".join(lines)
+
+    def append_summary(title: str, rows: list[dict]) -> None:
+        summary = summarize_performance(rows)
+        lines.extend(
+            [
+                title,
+                f"추천수: {summary['count']}",
+                f"승률: {_format_win_rate(summary['win_rate'])}",
+                f"평균수익률: {_format_return(summary['average_return'])}",
+                f"최고수익률: {_format_return(summary['best_return'])}",
+                f"최저수익률: {_format_return(summary['worst_return'])}",
+                f"수익 종목: {summary['winners']}",
+                f"손실 종목: {summary['losers']}",
+                f"계산 제외: {summary['excluded_count']}",
+                "",
+            ]
+        )
+
+    append_summary("누적 성과", cumulative_rows)
+    append_summary("최근 7일 성과", recent_7_rows)
+    append_summary("최근 30일 성과", recent_30_rows)
 
     if not performance_rows:
-        lines.append("추천 성과 데이터가 없습니다.")
+        lines.append("선택 날짜 추천 성과 데이터가 없습니다.")
         return "\n".join(lines)
 
-    summary = summarize_performance(performance_rows)
-    lines.extend(
-        [
-            f"추천수: {summary['count']}",
-            f"평균수익률: {_format_return(summary['average_return'])}",
-            f"승률: {'N/A' if summary['win_rate'] is None else str(summary['win_rate']) + '%'}",
-            f"수익 종목: {summary['winners']}",
-            f"손실 종목: {summary['losers']}",
-            "",
-            "종목별 성과",
-        ]
-    )
+    append_summary("선택 날짜 성과", performance_rows)
+    lines.append("종목별 성과")
 
     for index, row in enumerate(performance_rows, start=1):
         item = row["item"]

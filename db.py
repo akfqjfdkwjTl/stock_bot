@@ -27,6 +27,9 @@ SCHEMA_STATEMENTS = (
         theme TEXT,
         sector TEXT,
         price_at_pick REAL,
+        current_price REAL,
+        return_pct REAL,
+        performance_updated_at TEXT,
         created_at TEXT NOT NULL
     )
     """,
@@ -79,6 +82,9 @@ def init_db(db_path: Path | str = DB_PATH) -> Path:
             connection.execute(statement)
         _ensure_column(connection, "recommendations", "sector", "TEXT")
         _ensure_column(connection, "recommendations", "price_at_pick", "REAL")
+        _ensure_column(connection, "recommendations", "current_price", "REAL")
+        _ensure_column(connection, "recommendations", "return_pct", "REAL")
+        _ensure_column(connection, "recommendations", "performance_updated_at", "TEXT")
         connection.commit()
     return path
 
@@ -140,6 +146,9 @@ def save_recommendations(
                 item.get("theme", ""),
                 item.get("sector_group", item.get("theme", "")),
                 _price_at_pick(item),
+                _price_at_pick(item),
+                None,
+                None,
                 created_at,
             )
         )
@@ -158,6 +167,9 @@ def save_recommendations(
                 item.get("theme", ""),
                 item.get("sector_group", item.get("theme", "")),
                 _price_at_pick(item),
+                _price_at_pick(item),
+                None,
+                None,
                 created_at,
             )
         )
@@ -170,12 +182,38 @@ def save_recommendations(
         connection.executemany(
             """
             INSERT INTO recommendations (
-                run_date, market, ticker, name, rank, score, reason, theme, sector, price_at_pick, created_at
+                run_date, market, ticker, name, rank, score, reason, theme, sector,
+                price_at_pick, current_price, return_pct, performance_updated_at, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             rows,
         )
         connection.commit()
 
     return len(rows)
+
+
+def update_recommendation_performance(
+    recommendation_id: int,
+    *,
+    current_price: float | None,
+    return_pct: float | None,
+    db_path: Path | str = DB_PATH,
+) -> None:
+    """Store the latest calculated performance metrics for one recommendation row."""
+    if current_price is None or return_pct is None:
+        return
+
+    init_db(db_path)
+    updated_at = _kst_now().strftime("%Y-%m-%d %H:%M:%S KST")
+    with _connect(db_path) as connection:
+        connection.execute(
+            """
+            UPDATE recommendations
+            SET current_price = ?, return_pct = ?, performance_updated_at = ?
+            WHERE id = ?
+            """,
+            (float(current_price), float(return_pct), updated_at, int(recommendation_id)),
+        )
+        connection.commit()
