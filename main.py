@@ -93,6 +93,18 @@ STOCK_MASTER_BY_NAME = {
 }
 
 
+SCORE_DETAIL_FIELDS = (
+    "score_liquidity",
+    "score_volume",
+    "score_trend",
+    "score_breakout",
+    "score_box",
+    "score_vcp",
+    "score_risk",
+    "score_overheat",
+)
+
+
 def _format_currency(value: int) -> str:
     """숫자를 원화 형식으로 보여줍니다."""
     return f"{value:,}원"
@@ -208,6 +220,28 @@ def _summarize_recommendation_reason(candidate: dict) -> str:
     if candidate.get("theme") and candidate.get("theme") != "기타":
         parts.append(f"{candidate['theme']} 테마 뉴스 흐름이 반영됐습니다.")
     return " ".join(parts[:2]) or "기술적 조건과 뉴스 흐름을 함께 고려했습니다."
+
+
+def _copy_score_fields(entry: dict, item: dict) -> None:
+    for field in SCORE_DETAIL_FIELDS:
+        entry[field] = item.get(field, entry.get(field, 0))
+
+
+def _score_detail_from_entry(entry: dict) -> dict:
+    technical_score = (
+        entry.get("score_breakout", 0)
+        + entry.get("score_box", 0)
+        + entry.get("score_vcp", 0)
+        + entry.get("score_risk", 0)
+        + entry.get("score_overheat", 0)
+    )
+    return {
+        "뉴스 점수": int(entry.get("news_score", 0)),
+        "거래량 점수": int(entry.get("score_volume", 0)),
+        "추세 점수": int(entry.get("score_trend", 0)),
+        "기술적 점수": int(technical_score),
+        "총점": float(entry.get("recommendation_score", entry.get("final_score", 0))),
+    }
 
 
 def _passes_vcp_gate(candidate: dict) -> bool:
@@ -374,6 +408,7 @@ def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dic
                 "recent_news_keywords": item.get("recent_news_keywords", ""),
                 "issue_summary": item.get("issue_summary", ""),
                 "news_score": item.get("news_score", 0),
+                "news_items": item.get("news_items", []),
                 "short_score": 0,
                 "swing_score": 0,
                 "mid_score": 0,
@@ -398,6 +433,8 @@ def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dic
             entry["recent_news_keywords"] = item.get("recent_news_keywords", entry["recent_news_keywords"])
             entry["issue_summary"] = item.get("issue_summary", entry["issue_summary"])
             entry["news_score"] = max(entry["news_score"], item.get("news_score", 0))
+            entry["news_items"] = item.get("news_items", entry.get("news_items", []))
+            _copy_score_fields(entry, item)
 
     for item in strategy_results.get("swing", []):
         entry = merged_by_ticker.setdefault(
@@ -413,6 +450,7 @@ def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dic
                 "recent_news_keywords": item.get("recent_news_keywords", ""),
                 "issue_summary": item.get("issue_summary", ""),
                 "news_score": item.get("news_score", 0),
+                "news_items": item.get("news_items", []),
                 "short_score": 0,
                 "swing_score": 0,
                 "mid_score": 0,
@@ -442,6 +480,8 @@ def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dic
             entry["recent_news_keywords"] = item.get("recent_news_keywords", entry["recent_news_keywords"])
             entry["issue_summary"] = item.get("issue_summary", entry["issue_summary"])
             entry["news_score"] = max(entry["news_score"], item.get("news_score", 0))
+            entry["news_items"] = item.get("news_items", entry.get("news_items", []))
+            _copy_score_fields(entry, item)
 
     for item in strategy_results.get("mid", []):
         entry = merged_by_ticker.setdefault(
@@ -457,6 +497,7 @@ def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dic
                 "recent_news_keywords": item.get("recent_news_keywords", ""),
                 "issue_summary": item.get("issue_summary", ""),
                 "news_score": item.get("news_score", 0),
+                "news_items": item.get("news_items", []),
                 "short_score": 0,
                 "swing_score": 0,
                 "mid_score": 0,
@@ -479,6 +520,8 @@ def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dic
             entry["recent_news_keywords"] = item.get("recent_news_keywords", entry["recent_news_keywords"])
             entry["issue_summary"] = item.get("issue_summary", entry["issue_summary"])
             entry["news_score"] = max(entry["news_score"], item.get("news_score", 0))
+            entry["news_items"] = item.get("news_items", entry.get("news_items", []))
+            _copy_score_fields(entry, item)
 
     all_candidates: list[dict] = []
     for entry in merged_by_ticker.values():
@@ -512,6 +555,7 @@ def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dic
         enriched["theme"] = sector_group
         enriched["change_warning"] = _change_warning(enriched.get("change_pct"))
         enriched["summary_reason"] = _summarize_recommendation_reason(enriched)
+        enriched["score_detail"] = _score_detail_from_entry(enriched)
         all_candidates.append(enriched)
 
     selected = _select_diversified_candidates(all_candidates, SETTINGS.final_recommendation_limit)

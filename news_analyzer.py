@@ -176,6 +176,7 @@ def _parse_items(xml_text: str) -> list[dict[str, str]]:
             {
                 "title": item.findtext("title", default=""),
                 "description": item.findtext("description", default=""),
+                "link": item.findtext("link", default=""),
                 "pubDate": item.findtext("pubDate", default=""),
             }
         )
@@ -229,6 +230,23 @@ def _collect_relevant_news_items(stock_name: str, items: list[dict[str, str]]) -
     return [item for item in items if _is_direct_stock_news(stock_name, item)]
 
 
+def _format_news_item(item: dict[str, str]) -> dict[str, str]:
+    title = unescape(item.get("title", "")).strip()
+    if " - " in title:
+        title = title.rsplit(" - ", 1)[0].strip()
+    published_date = ""
+    try:
+        published = parsedate_to_datetime(item.get("pubDate", ""))
+        published_date = published.strftime("%Y-%m-%d")
+    except Exception:
+        pass
+    return {
+        "title": title,
+        "url": item.get("link", "").strip(),
+        "date": published_date,
+    }
+
+
 def _build_issue_summary(
     stock_name: str,
     primary_theme: str,
@@ -275,6 +293,7 @@ def analyze_stock_news(stock_name: str, ticker: str = "") -> dict[str, Any]:
         "issue_summary": "특이 이슈 없음 (기술적 흐름 기반)",
         "news_score": 0,
         "repeated_keywords": [],
+        "news_items": [],
         "news_error": "",
     }
 
@@ -329,6 +348,7 @@ def analyze_stock_news(stock_name: str, ticker: str = "") -> dict[str, Any]:
             "issue_summary": issue_summary,
             "news_score": news_score,
             "repeated_keywords": repeated_keywords,
+            "news_items": [_format_news_item(item) for item in relevant_items[:3]],
             "news_error": "",
         }
     except Exception as exc:
@@ -345,6 +365,7 @@ def enrich_candidate_with_news(candidate: dict[str, Any], news_info: dict[str, A
     enriched["recent_news_keywords"] = ", ".join(news_info.get("recent_news_keywords", []))
     enriched["issue_summary"] = news_info.get("issue_summary", "")
     enriched["news_score"] = int(news_info.get("news_score", 0))
+    enriched["news_items"] = news_info.get("news_items", [])
     enriched["news_error"] = news_info.get("news_error", "")
     enriched["total_score"] = min(100, int(enriched["total_score"]) + enriched["news_score"])
     return enriched

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -37,6 +38,8 @@ class Recommendation:
     theme: str
     price_at_pick: float | None
     price_date: str
+    news_items: list[dict]
+    score_detail: dict
     stored_current_price: float | None
     stored_return_pct: float | None
     performance_updated_at: str
@@ -299,6 +302,8 @@ def load_recommendations(
                        {theme_expr} AS theme,
                        price_at_pick,
                        price_date,
+                       news_items_json,
+                       score_detail_json,
                        current_price,
                        return_pct,
                        performance_updated_at,
@@ -326,6 +331,15 @@ def _optional_float(value: object) -> float | None:
         return None
 
 
+def _json_load(value: object, default: object) -> object:
+    if not value:
+        return default
+    try:
+        return json.loads(str(value))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return default
+
+
 def _row_to_recommendation(row: sqlite3.Row) -> Recommendation:
     return Recommendation(
         id=int(row["id"] or 0),
@@ -339,6 +353,8 @@ def _row_to_recommendation(row: sqlite3.Row) -> Recommendation:
         theme=str(row["theme"] or ""),
         price_at_pick=_optional_float(row["price_at_pick"]),
         price_date=str(row["price_date"] or ""),
+        news_items=_json_load(row["news_items_json"], []),
+        score_detail=_json_load(row["score_detail_json"], {}),
         stored_current_price=_optional_float(row["current_price"]),
         stored_return_pct=_optional_float(row["return_pct"]),
         performance_updated_at=str(row["performance_updated_at"] or ""),
@@ -362,6 +378,8 @@ def load_all_recommendations() -> tuple[list[Recommendation], str | None]:
                        {theme_expr} AS theme,
                        price_at_pick,
                        price_date,
+                       news_items_json,
+                       score_detail_json,
                        current_price,
                        return_pct,
                        performance_updated_at,
@@ -512,6 +530,8 @@ def render_stock_card(item: Recommendation, *, featured: bool = False) -> str:
     theme = item.theme or "기타"
     price_data = get_stock_price_data(item.ticker)
     change_direction = price_data["change_direction"]
+    news_html = render_news_items(item.news_items)
+    score_html = render_score_detail(item.score_detail, item.score)
     return f"""
       <article class="stock-card{featured_class}">
         <div class="card-top">
@@ -535,7 +555,57 @@ def render_stock_card(item: Recommendation, *, featured: bool = False) -> str:
           <span>핵심 선정 이유</span>
           <p>{esc(reason)}</p>
         </div>
+        {news_html}
+        {score_html}
       </article>
+    """
+
+
+def render_news_items(news_items: list[dict]) -> str:
+    items = [item for item in news_items if item.get("title")][:3]
+    if not items:
+        return ""
+    links = []
+    for item in items:
+        date_text = item.get("date") or "날짜 미상"
+        title = item.get("title", "")
+        url = item.get("url", "")
+        if url:
+            title_html = (
+                f'<a href="{esc(url)}" target="_blank" rel="noopener noreferrer">{esc(title)}</a>'
+            )
+        else:
+            title_html = esc(title)
+        links.append(
+            f"""
+            <li>
+              <time>{esc(date_text)}</time>
+              <p>{title_html}</p>
+            </li>
+            """
+        )
+    return f"""
+      <div class="info-block news-block">
+        <span>최근 이슈</span>
+        <ul>{''.join(links)}</ul>
+      </div>
+    """
+
+
+def render_score_detail(score_detail: dict, fallback_total: float) -> str:
+    if not score_detail:
+        return ""
+    ordered_keys = ("뉴스 점수", "거래량 점수", "추세 점수", "기술적 점수")
+    rows = []
+    for key in ordered_keys:
+        if key in score_detail:
+            rows.append(f"<div><span>{esc(key)}</span><strong>{esc(score_detail[key])}</strong></div>")
+    total = score_detail.get("총점", fallback_total)
+    rows.append(f"<div><span>총점</span><strong>{float(total):.1f}</strong></div>")
+    return f"""
+      <div class="score-detail" aria-label="점수 근거">
+        {''.join(rows)}
+      </div>
     """
 
 
@@ -1096,6 +1166,68 @@ def render_dashboard(selected_date: str | None = None) -> str:
       font-size: 12px;
       line-height: 1.65;
     }}
+    .news-block {{
+      margin-top: 14px;
+    }}
+    .news-block ul {{
+      display: grid;
+      gap: 8px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }}
+    .news-block li {{
+      padding: 8px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(8,12,18,.55);
+    }}
+    .news-block time {{
+      display: block;
+      margin-bottom: 4px;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 800;
+    }}
+    .news-block p {{
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      line-height: 1.45;
+    }}
+    .news-block a {{
+      color: #d7deea;
+      text-decoration: none;
+    }}
+    .news-block a:hover {{
+      color: #75d8ff;
+    }}
+    .score-detail {{
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 7px;
+      margin-top: 14px;
+    }}
+    .score-detail div {{
+      min-width: 0;
+      padding: 8px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(8,12,18,.55);
+    }}
+    .score-detail span {{
+      display: block;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 800;
+    }}
+    .score-detail strong {{
+      display: block;
+      margin-top: 5px;
+      color: var(--text);
+      font-size: 12px;
+    }}
     .performance-summary {{
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1269,6 +1401,9 @@ def render_dashboard(selected_date: str | None = None) -> str:
       .stock-meta {{ margin: 12px 0; }}
       .stock-meta div {{ min-height: 48px; padding: 8px; }}
       .info-block p, .empty-card p {{ font-size: 11px; line-height: 1.55; }}
+      .news-block {{ margin-top: 12px; }}
+      .news-block li {{ padding: 7px; }}
+      .score-detail {{ grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin-top: 12px; }}
     }}
     @media (max-width: 560px) {{
       .market-value-row strong,
