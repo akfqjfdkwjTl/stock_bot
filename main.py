@@ -40,6 +40,11 @@ SECTOR_GROUPS = {
     "생활가전": "생활가전",
     "전장": "전장",
     "통신/AI": "통신/AI",
+    "항공": "항공/운송",
+    "항공운송": "항공/운송",
+    "여행": "항공/운송",
+    "운송": "항공/운송",
+    "항공/운송": "항공/운송",
 }
 
 STOCK_MASTER_SECTORS = {
@@ -68,6 +73,11 @@ STOCK_MASTER_SECTORS = {
     "012330": {"sector": "전장", "industry": "자동차부품"},
     "068270": {"sector": "바이오", "industry": "바이오"},
     "207940": {"sector": "바이오", "industry": "바이오"},
+    "003490": {
+        "sector": "항공/운송",
+        "industry": "항공운송",
+        "representative_themes": ["항공", "여행", "운송"],
+    },
 }
 
 STOCK_MASTER_BY_NAME = {
@@ -90,6 +100,7 @@ STOCK_MASTER_BY_NAME = {
     "현대모비스": STOCK_MASTER_SECTORS["012330"],
     "셀트리온": STOCK_MASTER_SECTORS["068270"],
     "삼성바이오로직스": STOCK_MASTER_SECTORS["207940"],
+    "대한항공": STOCK_MASTER_SECTORS["003490"],
 }
 
 
@@ -135,13 +146,31 @@ def _normalize_sector(theme: str) -> str:
     return SECTOR_GROUPS.get(normalized, normalized or "기타")
 
 
-def _resolve_master_classification(ticker: str, name: str, fallback_theme: str) -> tuple[str, str]:
+def _resolve_master_classification(ticker: str, name: str, fallback_theme: str) -> tuple[str, str, list[str]]:
     """뉴스 테마보다 종목 고유 섹터/산업군을 우선 적용합니다."""
     master = STOCK_MASTER_SECTORS.get(ticker) or STOCK_MASTER_BY_NAME.get(name)
     if master:
-        return master["sector"], master["industry"]
+        themes = master.get("representative_themes") or [master["sector"]]
+        return master["sector"], master["industry"], list(themes)
     sector = _normalize_sector(fallback_theme)
-    return sector, sector
+    return sector, sector, [sector]
+
+
+def _log_theme_resolution(
+    *,
+    ticker: str,
+    name: str,
+    fallback_theme: str,
+    sector_group: str,
+    industry_group: str,
+    representative_themes: list[str],
+) -> None:
+    themes = ", ".join(representative_themes) if representative_themes else sector_group
+    print(
+        "[theme-resolution] "
+        f"{ticker} {name} | news_theme={fallback_theme or 'N/A'} "
+        f"-> sector={sector_group}, industry={industry_group}, representative_themes={themes}"
+    )
 
 
 def _format_change_pct(value: object) -> str:
@@ -545,14 +574,24 @@ def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dic
         enriched["recommendation_score"] = round(observation_score, 1)
         enriched["grade"] = _grade_for_score(enriched["recommendation_score"])
         enriched["strategy_type"] = strategy_type
-        sector_group, industry_group = _resolve_master_classification(
+        fallback_theme = enriched.get("theme", "기타")
+        sector_group, industry_group, representative_themes = _resolve_master_classification(
             enriched["ticker"],
             enriched["name"],
-            enriched.get("theme", "기타"),
+            fallback_theme,
         )
         enriched["sector_group"] = sector_group
         enriched["industry_group"] = industry_group
+        enriched["representative_themes"] = representative_themes
         enriched["theme"] = sector_group
+        _log_theme_resolution(
+            ticker=enriched["ticker"],
+            name=enriched["name"],
+            fallback_theme=fallback_theme,
+            sector_group=sector_group,
+            industry_group=industry_group,
+            representative_themes=representative_themes,
+        )
         enriched["change_warning"] = _change_warning(enriched.get("change_pct"))
         enriched["summary_reason"] = _summarize_recommendation_reason(enriched)
         enriched["score_detail"] = _score_detail_from_entry(enriched)

@@ -36,6 +36,8 @@ class Recommendation:
     score: float
     reason: str
     theme: str
+    industry: str
+    representative_themes: list[str]
     price_at_pick: float | None
     price_date: str
     news_items: list[dict]
@@ -44,6 +46,15 @@ class Recommendation:
     stored_return_pct: float | None
     performance_updated_at: str
     created_at: str
+
+
+STOCK_DISPLAY_CLASSIFICATION = {
+    "003490": {
+        "sector": "항공/운송",
+        "industry": "항공운송",
+        "representative_themes": ["항공", "여행", "운송"],
+    },
+}
 
 
 def get_kst_timestamp() -> str:
@@ -295,11 +306,17 @@ def load_recommendations(
                 return [], selected_date, None
             columns = {row["name"] for row in connection.execute("PRAGMA table_info(recommendations)")}
             theme_expr = "COALESCE(sector, theme)" if "sector" in columns else "theme"
+            industry_expr = "industry" if "industry" in columns else "''"
+            representative_themes_expr = (
+                "representative_themes_json" if "representative_themes_json" in columns else "'[]'"
+            )
 
             rows = connection.execute(
                 f"""
                 SELECT id, run_date, market, ticker, name, rank, score, reason,
                        {theme_expr} AS theme,
+                       {industry_expr} AS industry,
+                       {representative_themes_expr} AS representative_themes_json,
                        price_at_pick,
                        price_date,
                        news_items_json,
@@ -341,6 +358,18 @@ def _json_load(value: object, default: object) -> object:
 
 
 def _row_to_recommendation(row: sqlite3.Row) -> Recommendation:
+    display_classification = STOCK_DISPLAY_CLASSIFICATION.get(str(row["ticker"] or ""))
+    theme = str(row["theme"] or "")
+    industry = str(row["industry"] or "") if "industry" in row.keys() else ""
+    representative_themes = (
+        _json_load(row["representative_themes_json"], [])
+        if "representative_themes_json" in row.keys()
+        else []
+    )
+    if display_classification:
+        theme = display_classification["sector"]
+        industry = industry or display_classification["industry"]
+        representative_themes = representative_themes or display_classification["representative_themes"]
     return Recommendation(
         id=int(row["id"] or 0),
         run_date=str(row["run_date"] or ""),
@@ -350,7 +379,9 @@ def _row_to_recommendation(row: sqlite3.Row) -> Recommendation:
         rank=int(row["rank"] or 0),
         score=float(row["score"] or 0),
         reason=str(row["reason"] or ""),
-        theme=str(row["theme"] or ""),
+        theme=theme,
+        industry=industry,
+        representative_themes=representative_themes,
         price_at_pick=_optional_float(row["price_at_pick"]),
         price_date=str(row["price_date"] or ""),
         news_items=_json_load(row["news_items_json"], []),
@@ -372,10 +403,16 @@ def load_all_recommendations() -> tuple[list[Recommendation], str | None]:
             connection.row_factory = sqlite3.Row
             columns = {row["name"] for row in connection.execute("PRAGMA table_info(recommendations)")}
             theme_expr = "COALESCE(sector, theme)" if "sector" in columns else "theme"
+            industry_expr = "industry" if "industry" in columns else "''"
+            representative_themes_expr = (
+                "representative_themes_json" if "representative_themes_json" in columns else "'[]'"
+            )
             rows = connection.execute(
                 f"""
                 SELECT id, run_date, market, ticker, name, rank, score, reason,
                        {theme_expr} AS theme,
+                       {industry_expr} AS industry,
+                       {representative_themes_expr} AS representative_themes_json,
                        price_at_pick,
                        price_date,
                        news_items_json,
@@ -527,7 +564,9 @@ def render_market_card(item: dict, index: int) -> str:
 def render_stock_card(item: Recommendation, *, featured: bool = False) -> str:
     featured_class = " featured" if featured else ""
     reason = item.reason or "저장된 선정 이유가 없습니다."
-    theme = item.theme or "기타"
+    industry = item.industry or item.theme or "기타"
+    representative_themes = item.representative_themes or ([item.theme] if item.theme else ["기타"])
+    representative_theme_text = ", ".join(representative_themes)
     price_data = get_stock_price_data(item.ticker)
     change_direction = price_data["change_direction"]
     news_html = render_news_items(item.news_items)
@@ -549,8 +588,8 @@ def render_stock_card(item: Recommendation, *, featured: bool = False) -> str:
         </div>
         <div class="stock-meta">
           <div><span>순위</span><strong>{item.rank}</strong></div>
-          <div><span>거래량</span><strong>{esc(price_data["volume"])}</strong></div>
-          <div><span>테마</span><strong>{esc(theme)}</strong></div>
+          <div><span>산업군</span><strong>{esc(industry)}</strong></div>
+          <div><span>대표 테마</span><strong>{esc(representative_theme_text)}</strong></div>
         </div>
         <div class="info-block">
           <span>핵심 선정 이유</span>

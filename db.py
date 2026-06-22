@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -27,6 +28,8 @@ SCHEMA_STATEMENTS = (
         reason TEXT,
         theme TEXT,
         sector TEXT,
+        industry TEXT,
+        representative_themes_json TEXT,
         price_at_pick REAL,
         price_date TEXT,
         news_items_json TEXT,
@@ -81,10 +84,12 @@ def _connect(db_path: Path | str = DB_PATH) -> sqlite3.Connection:
 def init_db(db_path: Path | str = DB_PATH) -> Path:
     """Create the SQLite database and required tables if they do not exist."""
     path = Path(db_path)
-    with _connect(path) as connection:
+    with closing(_connect(path)) as connection:
         for statement in SCHEMA_STATEMENTS:
             connection.execute(statement)
         _ensure_column(connection, "recommendations", "sector", "TEXT")
+        _ensure_column(connection, "recommendations", "industry", "TEXT")
+        _ensure_column(connection, "recommendations", "representative_themes_json", "TEXT")
         _ensure_column(connection, "recommendations", "price_at_pick", "REAL")
         _ensure_column(connection, "recommendations", "price_date", "TEXT")
         _ensure_column(connection, "recommendations", "news_items_json", "TEXT")
@@ -159,6 +164,8 @@ def save_recommendations(
                 _recommendation_reason(item),
                 item.get("theme", ""),
                 item.get("sector_group", item.get("theme", "")),
+                item.get("industry_group", ""),
+                _json_dump(item.get("representative_themes", [])),
                 _price_at_pick(item),
                 item.get("price_date", ""),
                 _json_dump(item.get("news_items", [])),
@@ -183,6 +190,8 @@ def save_recommendations(
                 _recommendation_reason(item),
                 item.get("theme", ""),
                 item.get("sector_group", item.get("theme", "")),
+                item.get("industry_group", ""),
+                _json_dump(item.get("representative_themes", [])),
                 _price_at_pick(item),
                 item.get("price_date", ""),
                 _json_dump(item.get("news_items", [])),
@@ -198,15 +207,16 @@ def save_recommendations(
     if not rows:
         return 0
 
-    with _connect(db_path) as connection:
+    with closing(_connect(db_path)) as connection:
         connection.executemany(
             """
             INSERT INTO recommendations (
                 run_date, market, ticker, name, rank, score, reason, theme, sector,
+                industry, representative_themes_json,
                 price_at_pick, price_date, news_items_json, score_detail_json,
                 current_price, return_pct, performance_updated_at, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             rows,
         )
@@ -228,7 +238,7 @@ def update_recommendation_performance(
 
     init_db(db_path)
     updated_at = _kst_now().strftime("%Y-%m-%d %H:%M:%S KST")
-    with _connect(db_path) as connection:
+    with closing(_connect(db_path)) as connection:
         connection.execute(
             """
             UPDATE recommendations
