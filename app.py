@@ -632,7 +632,11 @@ def _performance_extreme_detail(row: dict | None) -> str:
     if not row:
         return ""
     item: Recommendation = row["item"]
-    return f"{item.name} / {item.run_date}"
+    price_data = row["price_data"]
+    return (
+        f"{item.name} / 추천일 {item.run_date} / "
+        f"추천가 {_format_pick_price(item.price_at_pick)} / 현재가 {price_data['current_price']}"
+    )
 
 
 def render_performance_card(row: dict) -> str:
@@ -647,6 +651,7 @@ def render_performance_card(row: dict) -> str:
           <p>{esc(item.ticker)}</p>
         </div>
         <div class="performance-values">
+          <div><span>추천일</span><strong>{esc(item.run_date)}</strong></div>
           <div><span>추천가</span><strong>{esc(_format_pick_price(item.price_at_pick))}</strong></div>
           <div><span>현재가</span><strong>{esc(price_data["current_price"])}</strong></div>
           <div><span>수익률</span><strong class="{esc(return_direction)}">{esc(_format_return(return_pct))}</strong></div>

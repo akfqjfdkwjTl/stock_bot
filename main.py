@@ -838,6 +838,7 @@ def build_performance_message(selected_date: Optional[str] = None) -> str:
         lines.extend(
             [
                 f"{index}. {item.name}",
+                f"추천일: {item.run_date}",
                 f"추천가: {_format_pick_price(item.price_at_pick)}",
                 f"현재가: {price_data['current_price']}",
                 f"수익률: {_format_return(row['return_pct'])}",
@@ -852,7 +853,13 @@ def _performance_detail(row: dict | None) -> str:
     if not row:
         return ""
     item = row["item"]
-    return f" ({item.name}, {item.run_date})"
+    price_data = row["price_data"]
+    from app import _format_pick_price
+
+    return (
+        f" ({item.name}, 추천일 {item.run_date}, "
+        f"추천가 {_format_pick_price(item.price_at_pick)}, 현재가 {price_data['current_price']})"
+    )
 
 
 def main(mode: str = "real", strategy: Optional[str] = None) -> None:
