@@ -1,10 +1,29 @@
+# Python
 venv/
 __pycache__/
-*.log
+*.py[cod]
+.pytest_cache/
+.coverage
+
+# Secrets and local configuration
 .env
-data/*.db
-telegram_bot.lock
+.env.*
+!.env.example
+
+# Runtime logs, locks, and local databases
+*.log
+*.lock
+*.db
+*.sqlite
+*.sqlite3
+data/
+
+# Generated output
 dashboard.png
 results.csv
 market-data.json
 dashboard-data.json
+
+# OS/editor files
+.DS_Store
+Thumbs.db

@@ -21,6 +21,11 @@ logging.basicConfig(
     level=logging.INFO,
 )
 
+# HTTP client request URLs contain the Telegram bot token. Keep routine
+# request logging disabled so credentials never reach PM2 or repository logs.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+
 LOCK_PATH = Path(__file__).with_suffix(".lock")
 DASHBOARD_PUBLIC_URL = "http://168.110.116.149:8000"
 DASHBOARD_INTERNAL_URL = "http://127.0.0.1:8000"
