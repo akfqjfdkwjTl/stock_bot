@@ -18,6 +18,7 @@ from telegram_sender import send_telegram_message, send_telegram_photo
 
 VALID_STRATEGIES = ("short", "swing", "mid")
 KST = ZoneInfo("Asia/Seoul")
+UNCLASSIFIED_SECTOR = "미분류"
 DASHBOARD_URL = "http://168.110.116.149:8000"
 DASHBOARD_IMAGE_PATH = "dashboard.png"
 
@@ -147,13 +148,15 @@ def _normalize_sector(theme: str) -> str:
 
 
 def _resolve_master_classification(ticker: str, name: str, fallback_theme: str) -> tuple[str, str, list[str]]:
-    """뉴스 테마보다 종목 고유 섹터/산업군을 우선 적용합니다."""
+    """종목 마스터에 등록된 분류만 섹터/산업군으로 사용합니다."""
     master = STOCK_MASTER_SECTORS.get(ticker) or STOCK_MASTER_BY_NAME.get(name)
     if master:
         themes = master.get("representative_themes") or [master["sector"]]
         return master["sector"], master["industry"], list(themes)
-    sector = _normalize_sector(fallback_theme)
-    return sector, sector, [sector]
+
+    news_theme = (fallback_theme or "").strip()
+    representative_themes = [news_theme] if news_theme and news_theme != "기타" else []
+    return UNCLASSIFIED_SECTOR, UNCLASSIFIED_SECTOR, representative_themes
 
 
 def _log_theme_resolution(
@@ -361,7 +364,11 @@ def _can_add_candidate(
     if candidate["ticker"] in {row["ticker"] for row in selected}:
         return False
     sector_limit = max(1, SETTINGS.max_per_sector)
-    if sector_counts.get(candidate["sector_group"], 0) >= sector_limit:
+    sector_group = candidate["sector_group"]
+    if (
+        sector_group != UNCLASSIFIED_SECTOR
+        and sector_counts.get(sector_group, 0) >= sector_limit
+    ):
         return False
     return True
 
@@ -384,14 +391,24 @@ def _select_diversified_candidates(candidates: list[dict], limit: int) -> list[d
         sector_counts[candidate["sector_group"]] += 1
         industry_counts[candidate["industry_group"]] += 1
 
-    available_sectors = {row["sector_group"] for row in eligible}
+    available_sectors = {
+        row["sector_group"]
+        for row in eligible
+        if row["sector_group"] != UNCLASSIFIED_SECTOR
+    }
     target_sector_count = min(3, len(available_sectors), limit)
-    if len({row["sector_group"] for row in selected}) < target_sector_count:
+    selected_sectors = {
+        row["sector_group"]
+        for row in selected
+        if row["sector_group"] != UNCLASSIFIED_SECTOR
+    }
+    if len(selected_sectors) < target_sector_count:
         selected_tickers = {row["ticker"] for row in selected}
-        selected_sectors = {row["sector_group"] for row in selected}
         for candidate in eligible:
-            if len({row["sector_group"] for row in selected}) >= target_sector_count:
+            if len(selected_sectors) >= target_sector_count:
                 break
+            if candidate["sector_group"] == UNCLASSIFIED_SECTOR:
+                continue
             if candidate["ticker"] in selected_tickers or candidate["sector_group"] in selected_sectors:
                 continue
             replace_index = next(
@@ -401,7 +418,10 @@ def _select_diversified_candidates(candidates: list[dict], limit: int) -> list[d
                         enumerate(selected),
                         key=lambda pair: pair[1]["recommendation_score"],
                     )
-                    if sector_counts[row["sector_group"]] > 1
+                    if (
+                        row["sector_group"] == UNCLASSIFIED_SECTOR
+                        or sector_counts[row["sector_group"]] > 1
+                    )
                 ),
                 None,
             )
@@ -414,7 +434,11 @@ def _select_diversified_candidates(candidates: list[dict], limit: int) -> list[d
             sector_counts[candidate["sector_group"]] += 1
             industry_counts[candidate["industry_group"]] += 1
             selected_tickers = {row["ticker"] for row in selected}
-            selected_sectors = {row["sector_group"] for row in selected}
+            selected_sectors = {
+                row["sector_group"]
+                for row in selected
+                if row["sector_group"] != UNCLASSIFIED_SECTOR
+            }
 
     selected.sort(key=lambda row: row["recommendation_score"], reverse=True)
     return selected[:limit]
@@ -584,7 +608,7 @@ def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dic
         enriched["sector_group"] = sector_group
         enriched["industry_group"] = industry_group
         enriched["representative_themes"] = representative_themes
-        enriched["theme"] = sector_group
+        enriched["news_theme"] = fallback_theme
         _log_theme_resolution(
             ticker=enriched["ticker"],
             name=enriched["name"],
