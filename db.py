@@ -144,7 +144,7 @@ def save_recommendations(
     market: str = "KR",
     db_path: Path | str = DB_PATH,
 ) -> int:
-    """Persist final recommendation rows. Returns the number of inserted rows."""
+    """Replace the day's market recommendations and return the inserted row count."""
     init_db(db_path)
     now = _kst_now()
     run_date = now.strftime("%Y-%m-%d")
@@ -208,6 +208,10 @@ def save_recommendations(
         return 0
 
     with closing(_connect(db_path)) as connection:
+        connection.execute(
+            "DELETE FROM recommendations WHERE run_date = ? AND market = ?",
+            (run_date, market),
+        )
         connection.executemany(
             """
             INSERT INTO recommendations (
