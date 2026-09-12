@@ -333,9 +333,9 @@ def _calculate_observation_score(entry: dict) -> float:
 
 
 def _grade_for_score(score: float) -> str:
-    if score >= 70:
+    if score >= SETTINGS.grade_a_threshold:
         return "A"
-    if score >= 60:
+    if score >= SETTINGS.grade_b_threshold:
         return "B"
     return "관찰"
 
@@ -360,7 +360,8 @@ def _can_add_candidate(
 ) -> bool:
     if candidate["ticker"] in {row["ticker"] for row in selected}:
         return False
-    if sector_counts.get(candidate["sector_group"], 0) >= 2:
+    sector_limit = max(1, SETTINGS.max_per_sector)
+    if sector_counts.get(candidate["sector_group"], 0) >= sector_limit:
         return False
     return True
 
@@ -612,7 +613,7 @@ def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dic
 
 def _build_strategy_recommendations(strategy_results: dict[str, list[dict]], strategy: str) -> list[dict]:
     """전략 전용 요청에서 사용할 최대 5개 결과입니다."""
-    items = strategy_results.get(strategy, [])[:5]
+    items = strategy_results.get(strategy, [])[: SETTINGS.top_n_per_strategy]
     recommendations: list[dict] = []
     for item in items:
         recommendations.append(
@@ -767,7 +768,7 @@ def build_message(
 
     for strategy_name in target_strategies:
         lines.append(f"전략: {strategy_name}")
-        items = filtered_results.get(strategy_name, [])
+        items = filtered_results.get(strategy_name, [])[: SETTINGS.top_n_per_strategy]
 
         if not items:
             if strategy_name == "swing":
