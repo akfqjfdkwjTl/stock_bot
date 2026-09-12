@@ -34,7 +34,13 @@ _install_import_stub(
 )
 
 from config import SETTINGS
-from main import _build_strategy_recommendations, _can_add_candidate, _grade_for_score
+from main import (
+    UNCLASSIFIED_SECTOR,
+    _build_strategy_recommendations,
+    _can_add_candidate,
+    _grade_for_score,
+    _resolve_master_classification,
+)
 
 
 class RecommendationSettingsTests(unittest.TestCase):
@@ -94,6 +100,46 @@ class RecommendationSettingsTests(unittest.TestCase):
             result = _build_strategy_recommendations({"short": items}, "short")
 
         self.assertEqual(len(result), 2)
+
+
+    def test_unknown_stock_news_theme_is_not_used_as_sector(self) -> None:
+        sector, industry, themes = _resolve_master_classification(
+            "028300",
+            "HLB",
+            "자동차",
+        )
+
+        self.assertEqual(sector, UNCLASSIFIED_SECTOR)
+        self.assertEqual(industry, UNCLASSIFIED_SECTOR)
+        self.assertEqual(themes, ["자동차"])
+
+    def test_registered_stock_keeps_verified_sector(self) -> None:
+        sector, industry, themes = _resolve_master_classification(
+            "005930",
+            "삼성전자",
+            "자동차",
+        )
+
+        self.assertEqual(sector, "반도체")
+        self.assertEqual(industry, "반도체")
+        self.assertEqual(themes, ["반도체"])
+
+    def test_unclassified_stocks_are_not_blocked_by_sector_cap(self) -> None:
+        candidate = {
+            "ticker": "000002",
+            "sector_group": UNCLASSIFIED_SECTOR,
+            "industry_group": UNCLASSIFIED_SECTOR,
+        }
+
+        with patch.object(SETTINGS, "max_per_sector", 1):
+            self.assertTrue(
+                _can_add_candidate(
+                    candidate,
+                    [{"ticker": "000001"}],
+                    {UNCLASSIFIED_SECTOR: 1},
+                    {UNCLASSIFIED_SECTOR: 1},
+                )
+            )
 
 
 if __name__ == "__main__":
