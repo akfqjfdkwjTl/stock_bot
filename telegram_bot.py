@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import atexit
+import asyncio
 import logging
 import os
 from pathlib import Path
@@ -24,6 +25,7 @@ LOCK_PATH = Path(__file__).with_suffix(".lock")
 DASHBOARD_PUBLIC_URL = "http://168.110.116.149:8000"
 DASHBOARD_INTERNAL_URL = "http://127.0.0.1:8000"
 DASHBOARD_SCREENSHOT_PATH = Path(__file__).with_name("dashboard.png")
+SCREENING_LOCK = asyncio.Lock()
 
 
 def _process_exists(pid: int) -> bool:
@@ -135,19 +137,27 @@ async def recommend_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             return
         strategy = requested
 
-    await send_text_chunks(update, context, "종목을 분석하고 있습니다. 잠시만 기다려 주세요.")
-
-    try:
-        result = build_recommendation_text(strategy=strategy)
-    except Exception as exc:
-        logging.exception("Screening failed")
-        await send_text_chunks(update, context, f"분석 중 오류가 발생했습니다: {exc}")
+    if SCREENING_LOCK.locked():
+        await send_text_chunks(update, context, "현재 다른 종목 분석이 진행 중입니다. 완료 후 다시 요청해 주세요.")
         return
 
-    await send_text_chunks(update, context, result)
+    await send_text_chunks(update, context, "종목을 분석하고 있습니다. 잠시만 기다려 주세요.")
 
-    if strategy is None:
-        await send_dashboard_screenshot(update, context)
+    async with SCREENING_LOCK:
+        try:
+            result = await asyncio.to_thread(
+                build_recommendation_text,
+                strategy=strategy,
+            )
+        except Exception as exc:
+            logging.exception("Screening failed")
+            await send_text_chunks(update, context, f"분석 중 오류가 발생했습니다: {exc}")
+            return
+
+        await send_text_chunks(update, context, result)
+
+        if strategy is None:
+            await send_dashboard_screenshot(update, context)
 
 
 async def performance_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
