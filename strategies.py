@@ -239,13 +239,17 @@ def _score_vcp(metrics: dict[str, Any]) -> int:
     return 0
 
 
-def _score_risk_reward(metrics: dict[str, Any], stop_price: float) -> int:
+def _score_risk_reward(
+    metrics: dict[str, Any],
+    stop_price: float,
+    target_price: float,
+) -> int:
+    """실제 손절가와 목표가를 기준으로 위험 대비 보상을 점수화합니다."""
     latest_close = metrics["latest"]["종가"]
-    if stop_price <= 0 or stop_price >= latest_close:
+    if stop_price <= 0 or stop_price >= latest_close or target_price <= latest_close:
         return 0
 
     risk_pct = ((latest_close - stop_price) / latest_close) * 100
-    target_price = latest_close * 1.12
     reward_pct = ((target_price - latest_close) / latest_close) * 100
 
     if risk_pct <= 5 and reward_pct / risk_pct >= 2:
@@ -340,7 +344,7 @@ def evaluate_short_strategy(ticker: str, name: str, df: pd.DataFrame) -> Optiona
         "breakout": _score_breakout(metrics),
         "box": 0,
         "vcp": 0,
-        "risk": _score_risk_reward(metrics, stop_price),
+        "risk": _score_risk_reward(metrics, stop_price, target_price),
         "overheat": _score_not_overheated(metrics),
     }
     reasons = [
@@ -386,7 +390,7 @@ def evaluate_short_fallback(ticker: str, name: str, df: pd.DataFrame) -> Optiona
         "breakout": _score_breakout(metrics),
         "box": 0,
         "vcp": 0,
-        "risk": _score_risk_reward(metrics, stop_price),
+        "risk": _score_risk_reward(metrics, stop_price, target_price),
         "overheat": _score_not_overheated(metrics),
     }
     if sum(score_parts.values()) < 35:
@@ -560,7 +564,7 @@ def evaluate_mid_strategy(ticker: str, name: str, df: pd.DataFrame) -> Optional[
         "breakout": _score_breakout(metrics, near_high=True),
         "box": _score_box_breakout(metrics),
         "vcp": _score_vcp(metrics),
-        "risk": _score_risk_reward(metrics, stop_price),
+        "risk": _score_risk_reward(metrics, stop_price, target_price),
         "overheat": _score_not_overheated(metrics),
     }
     reasons = [
@@ -605,7 +609,7 @@ def evaluate_mid_fallback(ticker: str, name: str, df: pd.DataFrame) -> Optional[
         "breakout": _score_breakout(metrics, near_high=True),
         "box": _score_box_breakout(metrics),
         "vcp": _score_vcp(metrics),
-        "risk": _score_risk_reward(metrics, stop_price),
+        "risk": _score_risk_reward(metrics, stop_price, target_price),
         "overheat": _score_not_overheated(metrics),
     }
     if sum(score_parts.values()) < 24:

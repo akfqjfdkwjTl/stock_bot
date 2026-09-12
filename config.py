@@ -26,7 +26,7 @@ class Settings:
     dashboard_capture_path: str = "dashboard_capture.png"
     enable_image_output: bool = os.getenv("ENABLE_IMAGE_OUTPUT", "false").strip().lower() == "true"
     enable_dashboard_capture: bool = os.getenv("ENABLE_DASHBOARD_CAPTURE", "false").strip().lower() == "true"
-    top_n_per_strategy: int = 5
+    top_n_per_strategy: int = int(os.getenv("TOP_N_PER_STRATEGY", "5"))
     default_mode: str = os.getenv("SCREEN_MODE", "real").strip().lower() or "real"
     max_per_sector: int = int(os.getenv("MAX_PER_SECTOR", "1"))
     final_recommendation_limit: int = int(os.getenv("FINAL_RECOMMENDATION_LIMIT", "5"))
@@ -37,8 +37,8 @@ class Settings:
     news_lookback_days: int = int(os.getenv("NEWS_LOOKBACK_DAYS", "3"))
     news_max_items: int = int(os.getenv("NEWS_MAX_ITEMS", "8"))
     news_request_timeout: int = int(os.getenv("NEWS_REQUEST_TIMEOUT", "6"))
-    grade_a_threshold: float = float(os.getenv("GRADE_A_THRESHOLD", "60"))
-    grade_b_threshold: float = float(os.getenv("GRADE_B_THRESHOLD", os.getenv("WATCH_THRESHOLD", "45")))
+    grade_a_threshold: float = float(os.getenv("GRADE_A_THRESHOLD", "70"))
+    grade_b_threshold: float = float(os.getenv("GRADE_B_THRESHOLD", os.getenv("WATCH_THRESHOLD", "60")))
     backtest_take_profit_pct: float = float(os.getenv("BACKTEST_TAKE_PROFIT_PCT", "10"))
     backtest_stop_loss_pct: float = float(os.getenv("BACKTEST_STOP_LOSS_PCT", "5"))
     backtest_hold_days: int = int(os.getenv("BACKTEST_HOLD_DAYS", "10"))
