@@ -18,6 +18,9 @@ telegram_ext_module.ContextTypes = SimpleNamespace(DEFAULT_TYPE=object)
 sys.modules.setdefault("telegram", telegram_module)
 sys.modules.setdefault("telegram.ext", telegram_ext_module)
 
+if "telegram_sender" in sys.modules and not hasattr(sys.modules["telegram_sender"], "split_message"):
+    sys.modules["telegram_sender"].split_message = lambda text, limit=3500: [text]
+
 import telegram_bot
 
 
