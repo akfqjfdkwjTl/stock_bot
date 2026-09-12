@@ -371,7 +371,7 @@ def analyze_stock_news(stock_name: str, ticker: str = "") -> dict[str, Any]:
 
 
 def enrich_candidate_with_news(candidate: dict[str, Any], news_info: dict[str, Any]) -> dict[str, Any]:
-    """Attach news/theme fields and add the news score to the candidate total."""
+    """Attach news/theme fields without changing the pure technical strategy score."""
     enriched = dict(candidate)
     enriched["theme"] = news_info.get("theme", "") or "기타"
     enriched["recent_news_keywords"] = ", ".join(news_info.get("recent_news_keywords", []))
@@ -379,5 +379,4 @@ def enrich_candidate_with_news(candidate: dict[str, Any], news_info: dict[str, A
     enriched["news_score"] = int(news_info.get("news_score", 0))
     enriched["news_items"] = news_info.get("news_items", [])
     enriched["news_error"] = news_info.get("news_error", "")
-    enriched["total_score"] = min(100, int(enriched["total_score"]) + enriched["news_score"])
     return enriched
