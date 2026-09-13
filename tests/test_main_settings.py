@@ -141,6 +141,19 @@ class RecommendationSettingsTests(unittest.TestCase):
                 )
             )
 
+    def test_unknown_stock_uses_krx_listing_classification(self) -> None:
+        sector, industry, themes = _resolve_master_classification(
+            "999999",
+            "테스트전선",
+            "데이터센터",
+            "절연선 및 케이블 제조업",
+            "전력 케이블",
+        )
+
+        self.assertEqual(sector, "전력")
+        self.assertEqual(industry, "전력 케이블")
+        self.assertEqual(themes, ["전력"])
+
 
 if __name__ == "__main__":
     unittest.main()

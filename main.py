@@ -79,6 +79,8 @@ STOCK_MASTER_SECTORS = {
         "industry": "항공운송",
         "representative_themes": ["항공", "여행", "운송"],
     },
+    "443060": {"sector": "조선/방산", "industry": "선박 애프터마켓"},
+    "000500": {"sector": "전력", "industry": "전선"},
 }
 
 STOCK_MASTER_BY_NAME = {
@@ -102,6 +104,8 @@ STOCK_MASTER_BY_NAME = {
     "셀트리온": STOCK_MASTER_SECTORS["068270"],
     "삼성바이오로직스": STOCK_MASTER_SECTORS["207940"],
     "대한항공": STOCK_MASTER_SECTORS["003490"],
+    "HD현대마린솔루션": STOCK_MASTER_SECTORS["443060"],
+    "가온전선": STOCK_MASTER_SECTORS["000500"],
 }
 
 
@@ -147,12 +151,43 @@ def _normalize_sector(theme: str) -> str:
     return SECTOR_GROUPS.get(normalized, normalized or "기타")
 
 
-def _resolve_master_classification(ticker: str, name: str, fallback_theme: str) -> tuple[str, str, list[str]]:
-    """종목 마스터에 등록된 분류만 섹터/산업군으로 사용합니다."""
+def _normalize_listing_sector(sector: str, industry: str) -> str:
+    """KRX-DESC의 세부 업종을 최종 분산용 상위 섹터로 묶습니다."""
+    text = f"{sector} {industry}".strip().lower()
+    mappings = (
+        (("은행", "금융", "보험", "증권"), "금융"),
+        (("반도체",), "반도체"),
+        (("전선", "변압기", "송전", "배전", "전력"), "전력"),
+        (("자동차",), "자동차/전장"),
+        (("선박", "조선"), "조선/방산"),
+        (("항공", "운송"), "항공/운송"),
+        (("의약", "바이오"), "바이오"),
+        (("소프트웨어", "정보서비스", "인터넷", "통신"), "AI/IT"),
+        (("가정용 기기", "생활가전", "생활용품"), "생활가전"),
+    )
+    for keywords, group in mappings:
+        if any(keyword in text for keyword in keywords):
+            return group
+    return (sector or industry or UNCLASSIFIED_SECTOR).strip()
+
+
+def _resolve_master_classification(
+    ticker: str,
+    name: str,
+    fallback_theme: str,
+    listing_sector: str = "",
+    listing_industry: str = "",
+) -> tuple[str, str, list[str]]:
+    """수동 검증값을 우선하고, 없으면 KRX-DESC 공식 분류를 사용합니다."""
     master = STOCK_MASTER_SECTORS.get(ticker) or STOCK_MASTER_BY_NAME.get(name)
     if master:
         themes = master.get("representative_themes") or [master["sector"]]
         return master["sector"], master["industry"], list(themes)
+
+    if listing_sector or listing_industry:
+        sector_group = _normalize_listing_sector(listing_sector, listing_industry)
+        industry_group = (listing_industry or listing_sector).strip()
+        return sector_group, industry_group, [sector_group]
 
     news_theme = (fallback_theme or "").strip()
     representative_themes = [news_theme] if news_theme and news_theme != "기타" else []
@@ -249,7 +284,9 @@ def _summarize_recommendation_reason(candidate: dict) -> str:
         parts.append(f"박스 {candidate.get('box_range_pct', 0)}% 구간과 VCP 흐름을 확인했습니다.")
     if candidate.get("short_score", 0) > 0 and candidate.get("strategy_type") in ("short", "혼합"):
         parts.append(f"단기 거래량이 20일 평균 대비 {candidate.get('vol_ratio', 0)}배 수준입니다.")
-    if candidate.get("theme") and candidate.get("theme") != "기타":
+    if candidate.get("mid_score", 0) > 0 and candidate.get("strategy_type") == "mid":
+        parts.append("중기 추세·유동성 조건을 통과했습니다.")
+    if candidate.get("news_score", 0) > 0 and candidate.get("theme") and candidate.get("theme") != "기타":
         parts.append(f"{candidate['theme']} 테마 뉴스 흐름이 반영됐습니다.")
     return " ".join(parts[:2]) or "기술적 조건과 뉴스 흐름을 함께 고려했습니다."
 
@@ -463,6 +500,8 @@ def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dic
                 "issue_summary": item.get("issue_summary", ""),
                 "news_score": item.get("news_score", 0),
                 "news_items": item.get("news_items", []),
+                "listing_sector": item.get("listing_sector", ""),
+                "listing_industry": item.get("listing_industry", ""),
                 "short_score": 0,
                 "swing_score": 0,
                 "mid_score": 0,
@@ -488,6 +527,8 @@ def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dic
             entry["issue_summary"] = item.get("issue_summary", entry["issue_summary"])
             entry["news_score"] = max(entry["news_score"], item.get("news_score", 0))
             entry["news_items"] = item.get("news_items", entry.get("news_items", []))
+            entry["listing_sector"] = item.get("listing_sector", entry.get("listing_sector", ""))
+            entry["listing_industry"] = item.get("listing_industry", entry.get("listing_industry", ""))
             _copy_score_fields(entry, item)
 
     for item in strategy_results.get("swing", []):
@@ -505,6 +546,8 @@ def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dic
                 "issue_summary": item.get("issue_summary", ""),
                 "news_score": item.get("news_score", 0),
                 "news_items": item.get("news_items", []),
+                "listing_sector": item.get("listing_sector", ""),
+                "listing_industry": item.get("listing_industry", ""),
                 "short_score": 0,
                 "swing_score": 0,
                 "mid_score": 0,
@@ -535,6 +578,8 @@ def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dic
             entry["issue_summary"] = item.get("issue_summary", entry["issue_summary"])
             entry["news_score"] = max(entry["news_score"], item.get("news_score", 0))
             entry["news_items"] = item.get("news_items", entry.get("news_items", []))
+            entry["listing_sector"] = item.get("listing_sector", entry.get("listing_sector", ""))
+            entry["listing_industry"] = item.get("listing_industry", entry.get("listing_industry", ""))
             _copy_score_fields(entry, item)
 
     for item in strategy_results.get("mid", []):
@@ -552,6 +597,8 @@ def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dic
                 "issue_summary": item.get("issue_summary", ""),
                 "news_score": item.get("news_score", 0),
                 "news_items": item.get("news_items", []),
+                "listing_sector": item.get("listing_sector", ""),
+                "listing_industry": item.get("listing_industry", ""),
                 "short_score": 0,
                 "swing_score": 0,
                 "mid_score": 0,
@@ -575,6 +622,8 @@ def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dic
             entry["issue_summary"] = item.get("issue_summary", entry["issue_summary"])
             entry["news_score"] = max(entry["news_score"], item.get("news_score", 0))
             entry["news_items"] = item.get("news_items", entry.get("news_items", []))
+            entry["listing_sector"] = item.get("listing_sector", entry.get("listing_sector", ""))
+            entry["listing_industry"] = item.get("listing_industry", entry.get("listing_industry", ""))
             _copy_score_fields(entry, item)
 
     all_candidates: list[dict] = []
@@ -604,6 +653,8 @@ def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dic
             enriched["ticker"],
             enriched["name"],
             fallback_theme,
+            enriched.get("listing_sector", ""),
+            enriched.get("listing_industry", ""),
         )
         enriched["sector_group"] = sector_group
         enriched["industry_group"] = industry_group
