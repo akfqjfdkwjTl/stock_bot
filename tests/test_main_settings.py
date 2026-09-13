@@ -24,6 +24,7 @@ _install_import_stub(
 _install_import_stub("db", save_recommendations=lambda *args, **kwargs: 0)
 _install_import_stub(
     "stock_screener",
+    debug_symbol=lambda *args, **kwargs: {},
     run_screening=lambda *args, **kwargs: ({}, [], []),
     save_results_to_csv=lambda *args, **kwargs: None,
 )
@@ -39,7 +40,9 @@ from main import (
     _build_strategy_recommendations,
     _can_add_candidate,
     _grade_for_score,
+    _normalize_listing_sector,
     _resolve_master_classification,
+    build_symbol_debug_message,
 )
 
 
@@ -150,9 +153,75 @@ class RecommendationSettingsTests(unittest.TestCase):
             "전력 케이블",
         )
 
-        self.assertEqual(sector, "전력")
-        self.assertEqual(industry, "전력 케이블")
-        self.assertEqual(themes, ["전력"])
+        self.assertEqual(sector, "전선/전력인프라")
+        self.assertEqual(industry, "절연선 및 케이블 제조업")
+        self.assertEqual(themes, ["전선/전력인프라"])
+
+    def test_investment_sector_is_separate_from_raw_industry(self) -> None:
+        sector, industry_raw, _themes = _resolve_master_classification(
+            "006400",
+            "삼성SDI",
+            "자동차",
+            "일차전지 및 이차전지 제조업",
+            "배터리 셀",
+        )
+
+        self.assertEqual(sector, "2차전지/배터리")
+        self.assertEqual(industry_raw, "일차전지 및 이차전지 제조업")
+
+    def test_generic_engineering_does_not_override_verified_nuclear_sector(self) -> None:
+        sector, industry_raw, _themes = _resolve_master_classification(
+            "052690",
+            "한전기술",
+            "기타",
+            "건축기술, 엔지니어링 및 관련 기술 서비스업",
+            "원전 설계",
+        )
+
+        self.assertEqual(sector, "원전/엔지니어링")
+        self.assertIn("엔지니어링", industry_raw)
+
+    def test_unknown_raw_industry_is_not_exposed_as_sector(self) -> None:
+        self.assertEqual(
+            _normalize_listing_sector("그외 기타 개인 서비스업", "렌탈"),
+            UNCLASSIFIED_SECTOR,
+        )
+
+    def test_symbol_debug_message_contains_filter_and_ranking_fields(self) -> None:
+        symbol_info = {
+            "universe_included": True,
+            "listing_sector": "절연선 및 케이블 제조업",
+            "listing_industry": "전력 케이블",
+            "diagnostic": {
+                "ticker": "000500",
+                "name": "가온전선",
+                "technical_filter": "FAIL",
+                "trend": "PASS",
+                "liquidity": "PASS",
+                "setup_score": 7,
+                "entry_score": 27,
+                "risk_penalty": 0,
+                "risk_filter": "FAIL",
+                "failure_reason": "갭 하락 필터 실패",
+                "strategies": {},
+            },
+            "news": {"theme": "전력", "news_relevance": "MATCH", "news_score": 5},
+        }
+        final_groups = {"all_candidates": [], "selected": []}
+
+        with (
+            patch("main.run_screening", return_value=({}, [], [])),
+            patch("main.debug_symbol", return_value=symbol_info),
+            patch("main._build_final_recommendations", return_value=final_groups),
+        ):
+            message = build_symbol_debug_message("000500")
+
+        self.assertIn("universe 포함 여부: PASS", message)
+        self.assertIn("technical filter: FAIL", message)
+        self.assertIn("sector: 전선/전력인프라", message)
+        self.assertIn("news relevance: MATCH", message)
+        self.assertIn("final score: 0", message)
+        self.assertIn("최종 TOP5 ranking: 미포함", message)
 
 
 if __name__ == "__main__":

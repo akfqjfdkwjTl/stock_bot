@@ -6,7 +6,13 @@ import unittest
 
 import pandas as pd
 
-from strategies import _passes_downside_risk_filter, _score_risk_reward
+from stock_screener import _build_sample_ohlcv
+from strategies import (
+    _passes_downside_risk_filter,
+    _score_risk_reward,
+    diagnose_strategy_filters,
+    prepare_indicators,
+)
 
 
 class RiskRewardScoreTests(unittest.TestCase):
@@ -78,6 +84,24 @@ class DownsideRiskFilterTests(unittest.TestCase):
         }
 
         self.assertTrue(_passes_downside_risk_filter(metrics, -3.0))
+
+    def test_symbol_diagnostic_exposes_required_fields(self) -> None:
+        prepared = prepare_indicators(_build_sample_ohlcv(seed=500, profile="mid"))
+
+        result = diagnose_strategy_filters("000500", "가온전선", prepared)
+
+        for field in (
+            "technical_filter",
+            "trend",
+            "liquidity",
+            "setup_score",
+            "entry_score",
+            "risk_penalty",
+            "risk_filter",
+            "failure_reason",
+            "strategies",
+        ):
+            self.assertIn(field, result)
 
 
 if __name__ == "__main__":

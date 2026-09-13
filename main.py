@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 from config import SETTINGS
 from dashboard_capture import capture_dashboard, refresh_market_json, save_dashboard_data
 from db import save_recommendations
-from stock_screener import run_screening, save_results_to_csv
+from stock_screener import debug_symbol, run_screening, save_results_to_csv
 from telegram_sender import send_telegram_message, send_telegram_photo
 
 
@@ -79,8 +79,15 @@ STOCK_MASTER_SECTORS = {
         "industry": "항공운송",
         "representative_themes": ["항공", "여행", "운송"],
     },
-    "443060": {"sector": "조선/방산", "industry": "선박 애프터마켓"},
-    "000500": {"sector": "전력", "industry": "전선"},
+    "006400": {"sector": "2차전지/배터리", "industry": "일차전지 및 이차전지 제조업"},
+    "052690": {"sector": "원전/엔지니어링", "industry": "건축기술, 엔지니어링 및 관련 기술 서비스업"},
+    "000150": {"sector": "지주/전자소재", "industry": "회사 본부 및 경영 컨설팅 서비스업"},
+    "443060": {"sector": "조선/선박서비스", "industry": "건축기술, 엔지니어링 및 관련 기술 서비스업"},
+    "000500": {"sector": "전선/전력인프라", "industry": "절연선 및 케이블 제조업"},
+    "009540": {"sector": "조선/조선지주", "industry": "기타 금융업"},
+    "329180": {"sector": "조선/선박제조", "industry": "선박 및 보트 건조업"},
+    "078930": {"sector": "지주/에너지", "industry": "기타 금융업"},
+    "090430": {"sector": "소비재/화장품", "industry": "기타 화학제품 제조업"},
 }
 
 STOCK_MASTER_BY_NAME = {
@@ -106,6 +113,13 @@ STOCK_MASTER_BY_NAME = {
     "대한항공": STOCK_MASTER_SECTORS["003490"],
     "HD현대마린솔루션": STOCK_MASTER_SECTORS["443060"],
     "가온전선": STOCK_MASTER_SECTORS["000500"],
+    "삼성SDI": STOCK_MASTER_SECTORS["006400"],
+    "한전기술": STOCK_MASTER_SECTORS["052690"],
+    "두산": STOCK_MASTER_SECTORS["000150"],
+    "HD한국조선해양": STOCK_MASTER_SECTORS["009540"],
+    "HD현대중공업": STOCK_MASTER_SECTORS["329180"],
+    "GS": STOCK_MASTER_SECTORS["078930"],
+    "아모레퍼시픽": STOCK_MASTER_SECTORS["090430"],
 }
 
 
@@ -152,23 +166,28 @@ def _normalize_sector(theme: str) -> str:
 
 
 def _normalize_listing_sector(sector: str, industry: str) -> str:
-    """KRX-DESC의 세부 업종을 최종 분산용 상위 섹터로 묶습니다."""
+    """KRX 원업종을 투자자가 읽기 쉬운 섹터로 정규화합니다."""
     text = f"{sector} {industry}".strip().lower()
     mappings = (
+        (("이차전지", "2차전지", "축전지", "배터리"), "2차전지/배터리"),
+        (("원자력", "원전"), "원전/엔지니어링"),
+        (("전선", "케이블", "송전", "배전"), "전선/전력인프라"),
         (("은행", "금융", "보험", "증권"), "금융"),
         (("반도체",), "반도체"),
-        (("전선", "변압기", "송전", "배전", "전력"), "전력"),
+        (("변압기", "발전기", "전력"), "전력기기/인프라"),
         (("자동차",), "자동차/전장"),
-        (("선박", "조선"), "조선/방산"),
+        (("선박", "조선"), "조선/선박서비스"),
         (("항공", "운송"), "항공/운송"),
         (("의약", "바이오"), "바이오"),
         (("소프트웨어", "정보서비스", "인터넷", "통신"), "AI/IT"),
         (("가정용 기기", "생활가전", "생활용품"), "생활가전"),
+        (("화장품",), "소비재/화장품"),
+        (("엔지니어링", "건축기술"), "산업재/엔지니어링"),
     )
     for keywords, group in mappings:
         if any(keyword in text for keyword in keywords):
             return group
-    return (sector or industry or UNCLASSIFIED_SECTOR).strip()
+    return UNCLASSIFIED_SECTOR
 
 
 def _resolve_master_classification(
@@ -178,15 +197,16 @@ def _resolve_master_classification(
     listing_sector: str = "",
     listing_industry: str = "",
 ) -> tuple[str, str, list[str]]:
-    """수동 검증값을 우선하고, 없으면 KRX-DESC 공식 분류를 사용합니다."""
+    """투자용 sector와 공식 industry_raw를 분리해 반환합니다."""
     master = STOCK_MASTER_SECTORS.get(ticker) or STOCK_MASTER_BY_NAME.get(name)
     if master:
         themes = master.get("representative_themes") or [master["sector"]]
-        return master["sector"], master["industry"], list(themes)
+        industry_raw = (listing_sector or listing_industry or master["industry"]).strip()
+        return master["sector"], industry_raw, list(themes)
 
     if listing_sector or listing_industry:
         sector_group = _normalize_listing_sector(listing_sector, listing_industry)
-        industry_group = (listing_industry or listing_sector).strip()
+        industry_group = (listing_sector or listing_industry).strip()
         return sector_group, industry_group, [sector_group]
 
     news_theme = (fallback_theme or "").strip()
@@ -499,6 +519,7 @@ def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dic
                 "recent_news_keywords": item.get("recent_news_keywords", ""),
                 "issue_summary": item.get("issue_summary", ""),
                 "news_score": item.get("news_score", 0),
+                "news_relevance": item.get("news_relevance", "NONE"),
                 "news_items": item.get("news_items", []),
                 "listing_sector": item.get("listing_sector", ""),
                 "listing_industry": item.get("listing_industry", ""),
@@ -526,6 +547,7 @@ def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dic
             entry["recent_news_keywords"] = item.get("recent_news_keywords", entry["recent_news_keywords"])
             entry["issue_summary"] = item.get("issue_summary", entry["issue_summary"])
             entry["news_score"] = max(entry["news_score"], item.get("news_score", 0))
+            entry["news_relevance"] = item.get("news_relevance", entry.get("news_relevance", "NONE"))
             entry["news_items"] = item.get("news_items", entry.get("news_items", []))
             entry["listing_sector"] = item.get("listing_sector", entry.get("listing_sector", ""))
             entry["listing_industry"] = item.get("listing_industry", entry.get("listing_industry", ""))
@@ -545,6 +567,7 @@ def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dic
                 "recent_news_keywords": item.get("recent_news_keywords", ""),
                 "issue_summary": item.get("issue_summary", ""),
                 "news_score": item.get("news_score", 0),
+                "news_relevance": item.get("news_relevance", "NONE"),
                 "news_items": item.get("news_items", []),
                 "listing_sector": item.get("listing_sector", ""),
                 "listing_industry": item.get("listing_industry", ""),
@@ -577,6 +600,7 @@ def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dic
             entry["recent_news_keywords"] = item.get("recent_news_keywords", entry["recent_news_keywords"])
             entry["issue_summary"] = item.get("issue_summary", entry["issue_summary"])
             entry["news_score"] = max(entry["news_score"], item.get("news_score", 0))
+            entry["news_relevance"] = item.get("news_relevance", entry.get("news_relevance", "NONE"))
             entry["news_items"] = item.get("news_items", entry.get("news_items", []))
             entry["listing_sector"] = item.get("listing_sector", entry.get("listing_sector", ""))
             entry["listing_industry"] = item.get("listing_industry", entry.get("listing_industry", ""))
@@ -596,6 +620,7 @@ def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dic
                 "recent_news_keywords": item.get("recent_news_keywords", ""),
                 "issue_summary": item.get("issue_summary", ""),
                 "news_score": item.get("news_score", 0),
+                "news_relevance": item.get("news_relevance", "NONE"),
                 "news_items": item.get("news_items", []),
                 "listing_sector": item.get("listing_sector", ""),
                 "listing_industry": item.get("listing_industry", ""),
@@ -621,6 +646,7 @@ def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dic
             entry["recent_news_keywords"] = item.get("recent_news_keywords", entry["recent_news_keywords"])
             entry["issue_summary"] = item.get("issue_summary", entry["issue_summary"])
             entry["news_score"] = max(entry["news_score"], item.get("news_score", 0))
+            entry["news_relevance"] = item.get("news_relevance", entry.get("news_relevance", "NONE"))
             entry["news_items"] = item.get("news_items", entry.get("news_items", []))
             entry["listing_sector"] = item.get("listing_sector", entry.get("listing_sector", ""))
             entry["listing_industry"] = item.get("listing_industry", entry.get("listing_industry", ""))
@@ -658,6 +684,7 @@ def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dic
         )
         enriched["sector_group"] = sector_group
         enriched["industry_group"] = industry_group
+        enriched["industry_raw"] = industry_group
         enriched["representative_themes"] = representative_themes
         enriched["news_theme"] = fallback_theme
         _log_theme_resolution(
@@ -674,6 +701,11 @@ def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dic
         all_candidates.append(enriched)
 
     selected = _select_diversified_candidates(all_candidates, SETTINGS.final_recommendation_limit)
+    ranked_candidates = sorted(
+        all_candidates,
+        key=lambda row: row["recommendation_score"],
+        reverse=True,
+    )
     selected_a = [row for row in selected if row["grade"] == "A"]
     selected_b = [row for row in selected if row["grade"] == "B"]
     selected_observation = [row for row in selected if row["grade"] == "관찰"]
@@ -683,7 +715,83 @@ def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dic
         "grade_b": selected_b,
         "watch": selected_observation,
         "selected": selected,
+        "all_candidates": ranked_candidates,
     }
+
+
+def build_symbol_debug_message(ticker_or_name: str) -> str:
+    """특정 종목이 추천되거나 탈락한 과정을 동일 스크리닝 조건으로 설명합니다."""
+    query = str(ticker_or_name or "").strip()
+    if not query:
+        return "사용법: /debug 종목코드 또는 종목명\n예시: /debug 000500"
+
+    strategy_results, _flat_results, errors = run_screening(mode="real")
+    symbol_info = debug_symbol(query)
+    if not symbol_info.get("universe_included"):
+        return "\n".join(
+            [
+                f"[종목 진단] {query}",
+                "universe 포함 여부: FAIL",
+                f"탈락 사유: {symbol_info.get('failure_reason', '종목을 찾지 못했습니다.')}",
+            ]
+        )
+
+    diagnostic = symbol_info["diagnostic"]
+    news = symbol_info["news"]
+    final_groups = _build_final_recommendations(strategy_results)
+    ticker = diagnostic["ticker"]
+    ranked = final_groups["all_candidates"]
+    ranked_position = next(
+        (index for index, item in enumerate(ranked, start=1) if item["ticker"] == ticker),
+        None,
+    )
+    selected_position = next(
+        (index for index, item in enumerate(final_groups["selected"], start=1) if item["ticker"] == ticker),
+        None,
+    )
+    candidate = next((item for item in ranked if item["ticker"] == ticker), None)
+    sector, industry_raw, _themes = _resolve_master_classification(
+        ticker,
+        diagnostic["name"],
+        news.get("theme", ""),
+        symbol_info.get("listing_sector", ""),
+        symbol_info.get("listing_industry", ""),
+    )
+
+    failure_reason = diagnostic.get("failure_reason", "")
+    if candidate and selected_position is None:
+        failure_reason = "기술 후보에는 포함됐지만 점수순 또는 섹터 분산 제한으로 최종 TOP5에서 제외됐습니다."
+    elif candidate and selected_position:
+        failure_reason = "최종 추천 목록에 포함됐습니다."
+
+    lines = [
+        f"[종목 진단] {diagnostic['name']} / {ticker}",
+        "universe 포함 여부: PASS",
+        f"technical filter: {diagnostic['technical_filter']}",
+        f"trend: {diagnostic['trend']}",
+        f"liquidity: {diagnostic['liquidity']}",
+        f"setup score: {diagnostic['setup_score']}",
+        f"entry score: {diagnostic['entry_score']}",
+        f"risk penalty: {diagnostic['risk_penalty']} (감점 대신 필터 방식)",
+        f"risk filter: {diagnostic['risk_filter']}",
+        f"sector: {sector}",
+        f"industry_raw: {industry_raw}",
+        f"theme: {news.get('theme') or '없음'}",
+        f"news relevance: {news.get('news_relevance', 'NONE')}",
+        f"news score: {news.get('news_score', 0)}",
+        f"final score: {candidate.get('recommendation_score', 0) if candidate else 0}",
+        f"전체 후보 ranking: {ranked_position if ranked_position else '순위 없음'}",
+        f"최종 TOP5 ranking: {selected_position if selected_position else '미포함'}",
+        f"판정: {failure_reason or '정상'}",
+        "",
+        "전략별 최초 탈락 사유",
+    ]
+    for strategy_name, detail in diagnostic.get("strategies", {}).items():
+        reason = detail.get("failure_reason") or f"PASS ({detail.get('score', 0)}점)"
+        lines.append(f"- {strategy_name}: {reason}")
+    if errors:
+        lines.append(f"- 전체 스크리닝 데이터 오류: {len(errors)}건")
+    return "\n".join(lines)
 
 
 def _build_strategy_recommendations(strategy_results: dict[str, list[dict]], strategy: str) -> list[dict]:
@@ -729,6 +837,7 @@ def _append_ranked_recommendations(
         )
         lines.append(f"현재가: {_format_currency(int(item.get('current_price') or 0))}")
         lines.append(f"등락률: {_format_change_pct(item.get('change_pct'))}")
+        lines.append(f"뉴스 연관성: {item.get('news_relevance', 'NONE')}")
         if item.get("change_warning"):
             lines.append(item["change_warning"])
         lines.append(
