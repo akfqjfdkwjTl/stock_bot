@@ -16,6 +16,7 @@ from strategies import (
     evaluate_short_strategy,
     evaluate_swing_fallback,
     evaluate_swing_strategy,
+    diagnose_strategy_filters,
     prepare_indicators,
 )
 
@@ -293,8 +294,10 @@ def _append_flat_row(flat_results: list[dict[str, Any]], strategy_name: str, row
             "recent_news_keywords": row.get("recent_news_keywords", ""),
             "issue_summary": row.get("issue_summary", ""),
             "news_score": row.get("news_score", 0),
+            "news_relevance": row.get("news_relevance", "NONE"),
             "listing_sector": row.get("listing_sector", ""),
             "listing_industry": row.get("listing_industry", ""),
+            "industry_raw": row.get("industry_raw", row.get("listing_sector", "") or row.get("listing_industry", "")),
         }
     )
 
@@ -380,6 +383,7 @@ def _run_real_screening(
             if item.get("strategy") != "error":
                 item["listing_sector"] = listing_sector
                 item["listing_industry"] = listing_industry
+                item["industry_raw"] = listing_sector or listing_industry
 
         if any(item.get("strategy") != "error" for item in ticker_results):
             news_info = analyze_stock_news(
@@ -474,6 +478,55 @@ def run_screening(
     if selected_mode == "real":
         return _run_real_screening(strategy_filter=strategy_filter)
     raise ValueError(f"지원하지 않는 mode 입니다: {mode}")
+
+
+def debug_symbol(ticker_or_name: str) -> dict[str, Any]:
+    """특정 종목의 universe·필터·뉴스 상태를 추천 점수 변경 없이 진단합니다."""
+    import FinanceDataReader as fdr
+
+    query = str(ticker_or_name or "").strip()
+    listing_df = fdr.StockListing("KRX")
+    target_symbols = _select_real_symbols(listing_df)
+    try:
+        target_symbols = _attach_listing_metadata(target_symbols, _load_listing_metadata(fdr))
+    except Exception:
+        pass
+
+    code_query = query.zfill(6) if query.isdigit() else ""
+    mask = target_symbols["Code"].eq(code_query) if code_query else target_symbols["Name"].eq(query)
+    matched = target_symbols[mask]
+    if matched.empty:
+        return {
+            "query": query,
+            "universe_included": False,
+            "failure_reason": f"시가총액 상위 {SETTINGS.max_symbols}개 분석 universe에 포함되지 않았습니다.",
+        }
+
+    row = matched.iloc[0]
+    ticker = str(row["Code"]).zfill(6)
+    name = str(row["Name"])
+    listing_sector = str(row.get("Sector", "") or "").strip()
+    listing_industry = str(row.get("Industry", "") or "").strip()
+    end_date = datetime.today().date()
+    start_date = end_date - timedelta(days=SETTINGS.history_calendar_days)
+    fetched = fdr.DataReader(ticker, start_date, end_date)
+    normalized = _normalize_ohlcv(fetched)
+    prepared = prepare_indicators(normalized)
+    diagnostic = diagnose_strategy_filters(ticker, name, prepared)
+    news_info = analyze_stock_news(
+        name,
+        ticker=ticker,
+        sector=listing_sector,
+        industry=listing_industry,
+    )
+    return {
+        "query": query,
+        "universe_included": True,
+        "listing_sector": listing_sector,
+        "listing_industry": listing_industry,
+        "diagnostic": diagnostic,
+        "news": news_info,
+    }
 
 
 def save_results_to_csv(rows: list[dict[str, Any]]) -> None:

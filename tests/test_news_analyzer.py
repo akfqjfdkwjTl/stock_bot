@@ -3,16 +3,84 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from news_analyzer import (
     _build_issue_summary,
     _collect_theme_counts,
+    _collect_relevant_news_items,
+    _validate_news_entity,
+    analyze_stock_news,
     enrich_candidate_with_news,
     infer_base_theme,
 )
 
 
 class NewsEnrichmentTests(unittest.TestCase):
+    def test_sports_team_article_is_entity_mismatch(self) -> None:
+        article = {
+            "title": "'5위 넘볼 생각 마' 두산, 다시 3G 차 리드! NC 9-2 제압",
+            "description": "두산 선수들이 경기에서 승리했습니다.",
+        }
+
+        matched, reason = _validate_news_entity("두산", "000150", article)
+
+        self.assertFalse(matched)
+        self.assertEqual(reason, "MISMATCH_SPORTS")
+
+    def test_doosan_corporate_article_is_entity_match(self) -> None:
+        article = {
+            "title": "두산, 전자소재 사업 투자 확대",
+            "description": "두산 주가와 계열사 실적 전망이 부각됐습니다.",
+        }
+
+        matched, reason = _validate_news_entity("두산", "000150", article)
+
+        self.assertTrue(matched)
+        self.assertEqual(reason, "MATCH_CORPORATE_CONTEXT")
+
+    def test_ambiguous_doosan_photo_caption_is_sports_mismatch(self) -> None:
+        article = {
+            "title": "[사진] 토마, 두산 반드시 잡는다",
+            "description": "현장 포토뉴스",
+        }
+
+        matched, reason = _validate_news_entity("두산", "000150", article)
+
+        self.assertFalse(matched)
+        self.assertEqual(reason, "MISMATCH_SPORTS")
+
+    def test_mismatched_articles_are_removed_before_theme_extraction(self) -> None:
+        articles = [
+            {
+                "title": "두산 NC 9-2 제압",
+                "description": "야구 경기에서 투수와 타자가 활약했습니다.",
+            }
+        ]
+
+        relevant, mismatched = _collect_relevant_news_items("두산", articles, ticker="000150")
+
+        self.assertEqual(relevant, [])
+        self.assertEqual(len(mismatched), 1)
+
+    def test_all_mismatched_news_returns_zero_scores(self) -> None:
+        class FakeResponse:
+            text = """<rss><channel><item><title>두산 NC 9-2 제압</title><description>야구 경기 선수 승리</description><pubDate>Sat, 12 Sep 2026 10:00:00 +0900</pubDate></item></channel></rss>"""
+
+            @staticmethod
+            def raise_for_status() -> None:
+                return None
+
+        with (
+            patch("news_analyzer.requests.get", return_value=FakeResponse()),
+            patch("news_analyzer.SETTINGS.news_lookback_days", 100),
+        ):
+            result = analyze_stock_news("두산", ticker="000150")
+
+        self.assertEqual(result["news_relevance"], "MISMATCH")
+        self.assertEqual(result["news_score"], 0)
+        self.assertEqual(result["theme_score"], 0)
+
     def test_news_score_does_not_change_technical_score(self) -> None:
         candidate = {
             "ticker": "005930",

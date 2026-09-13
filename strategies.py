@@ -652,3 +652,151 @@ def evaluate_mid_fallback(ticker: str, name: str, df: pd.DataFrame) -> Optional[
         reasons,
         score_parts,
     )
+
+
+def diagnose_strategy_filters(ticker: str, name: str, df: pd.DataFrame) -> dict[str, Any]:
+    """점수나 전략 판정은 바꾸지 않고 종목별 필터 통과·탈락 근거를 설명합니다."""
+    metrics = _calculate_common_metrics(df)
+    if metrics is None:
+        return {
+            "ticker": ticker,
+            "name": name,
+            "technical_filter": "FAIL",
+            "trend": "UNKNOWN",
+            "liquidity": "FAIL",
+            "setup_score": 0,
+            "entry_score": 0,
+            "risk_penalty": 0,
+            "risk_filter": "UNKNOWN",
+            "failure_reason": "공통 필터 실패: 이력·가격·거래대금·등락률 조건 중 하나를 충족하지 못했습니다.",
+            "strategies": {},
+        }
+
+    latest = metrics["latest"]
+    strategy_checks: dict[str, list[tuple[bool, str]]] = {
+        "short_primary": [
+            (0.5 <= metrics["daily_change_pct"] <= 12, "당일 등락률이 0.5~12% 범위를 벗어났습니다."),
+            (latest["종가"] > latest["ma5"], "종가가 5일선 이하입니다."),
+            (metrics["close_to_high_pct"] <= 4, "종가가 당일 고가에서 4% 초과 밀렸습니다."),
+            (metrics["vol_ratio"] >= 1.2, "당일 거래량이 20일 평균의 1.2배 미만입니다."),
+        ],
+        "short_fallback": [
+            (metrics["daily_change_pct"] >= 0, "당일 등락률이 음수입니다."),
+            (latest["종가"] > latest["ma5"] * 0.985, "종가가 5일선 허용범위 아래입니다."),
+            (
+                metrics["vol_ratio"] >= 1.0 or metrics["value_ratio"] >= 1.0,
+                "거래량과 거래대금이 모두 20일 평균 미만입니다.",
+            ),
+        ],
+        "swing_primary": [
+            (
+                _passes_downside_risk_filter(metrics, SETTINGS.min_swing_daily_change_pct),
+                f"하락위험 필터 실패: 등락 {metrics['daily_change_pct']:.2f}%, 갭 {metrics['gap_pct']:.2f}%, 몸통 {metrics['candle_body_pct']:.2f}%.",
+            ),
+            (metrics["trading_value"] >= 5_000_000_000, "거래대금이 50억원 미만입니다."),
+            (5 <= metrics["box_range_pct"] <= 25, "20일 박스폭이 5~25% 범위를 벗어났습니다."),
+            (latest["종가"] >= metrics["box_high"] * 0.95, "종가가 20일 박스 상단의 95% 미만입니다."),
+            (latest["종가"] > latest["ma20"], "종가가 20일선 이하입니다."),
+            (metrics["ma20_slope"] > 0, "20일선 기울기가 상승이 아닙니다."),
+            (
+                metrics["recent_20d_volatility"] > metrics["recent_10d_volatility"] > metrics["recent_5d_volatility"],
+                "20일→10일→5일 변동성 축소가 성립하지 않습니다.",
+            ),
+            (metrics["vol5_ratio"] >= 1.05, "5일 평균 거래량이 20일 평균의 1.05배 미만입니다."),
+            (metrics["vol_ratio"] >= 1.1, "당일 거래량이 20일 평균의 1.1배 미만입니다."),
+        ],
+        "mid_primary": [
+            (
+                _passes_downside_risk_filter(metrics, SETTINGS.min_mid_daily_change_pct),
+                f"하락위험 필터 실패: 등락 {metrics['daily_change_pct']:.2f}%, 갭 {metrics['gap_pct']:.2f}%, 몸통 {metrics['candle_body_pct']:.2f}%.",
+            ),
+            (metrics["ma20_slope"] > 0 and metrics["ma60_slope"] > -0.01, "20일선 또는 60일선 기울기 조건 미달입니다."),
+            (latest["종가"] > latest["ma20"] > latest["ma60"], "종가>20일선>60일선 정배열이 아닙니다."),
+            (latest["종가"] >= metrics["high60"] * 0.92, "종가가 60일 고점의 92% 미만입니다."),
+            (metrics["daily_change_pct"] <= 12, "당일 상승률이 12%를 초과했습니다."),
+        ],
+        "mid_fallback": [
+            (
+                _passes_downside_risk_filter(metrics, SETTINGS.min_mid_fallback_daily_change_pct),
+                f"하락위험 필터 실패: 등락 {metrics['daily_change_pct']:.2f}%, 갭 {metrics['gap_pct']:.2f}%, 몸통 {metrics['candle_body_pct']:.2f}%.",
+            ),
+            (metrics["ma20_slope"] >= 0 and metrics["ma60_slope"] > -0.10, "중기 이동평균 기울기 조건 미달입니다."),
+            (latest["종가"] > latest["ma20"] * 0.97, "종가가 20일선 허용범위 아래입니다."),
+            (latest["종가"] >= metrics["high60"] * 0.85, "종가가 60일 고점의 85% 미만입니다."),
+        ],
+    }
+
+    evaluators = {
+        "short_primary": evaluate_short_strategy,
+        "short_fallback": evaluate_short_fallback,
+        "swing_primary": evaluate_swing_strategy,
+        "mid_primary": evaluate_mid_strategy,
+        "mid_fallback": evaluate_mid_fallback,
+    }
+    strategy_debug: dict[str, dict[str, Any]] = {}
+    candidates: list[dict[str, Any]] = []
+    for key, checks in strategy_checks.items():
+        failed = [reason for passed, reason in checks if not passed]
+        candidate = evaluators[key](ticker, name, df)
+        if candidate:
+            candidates.append(candidate)
+        strategy_debug[key] = {
+            "status": "PASS" if candidate else "FAIL",
+            "failure_reason": "" if candidate else (failed[0] if failed else "최소 점수 조건 미달입니다."),
+            "failed_checks": failed,
+            "score": candidate.get("total_score", 0) if candidate else 0,
+        }
+
+    best = max(candidates, key=lambda row: row["total_score"], default={})
+    if best:
+        setup_score = sum(best.get(field, 0) for field in ("score_breakout", "score_box", "score_vcp"))
+        entry_score = sum(best.get(field, 0) for field in ("score_liquidity", "score_volume", "score_trend"))
+    else:
+        # 탈락 종목도 현재 상태를 비교할 수 있도록 중기 기준의 진단 점수만 계산합니다.
+        # 이 값은 실제 추천 점수나 순위에는 사용하지 않습니다.
+        setup_score = (
+            _score_breakout(metrics, near_high=True)
+            + _score_box_breakout(metrics)
+            + _score_vcp(metrics)
+        )
+        entry_score = (
+            _score_liquidity(metrics)
+            + _score_volume(metrics)
+            + _score_ma_trend(metrics, require_mid_trend=True)
+        )
+    risk_filter_pass = all(
+        (
+            metrics["gap_pct"] >= SETTINGS.max_gap_down_pct,
+            metrics["candle_body_pct"] >= SETTINGS.max_bearish_body_pct,
+        )
+    )
+    first_failure = next(
+        (
+            detail["failure_reason"]
+            for detail in strategy_debug.values()
+            if detail["failure_reason"]
+        ),
+        "",
+    )
+    return {
+        "ticker": ticker,
+        "name": name,
+        "technical_filter": "PASS" if candidates else "FAIL",
+        "trend": "PASS" if latest["종가"] > latest["ma20"] and metrics["ma20_slope"] >= 0 else "FAIL",
+        "liquidity": "PASS",
+        "setup_score": int(setup_score),
+        "entry_score": int(entry_score),
+        # 현재 점수식은 위험을 음수 감점하지 않고 필터 탈락으로 처리합니다.
+        "risk_penalty": 0,
+        "risk_filter": "PASS" if risk_filter_pass else "FAIL",
+        "failure_reason": "" if candidates else first_failure,
+        "metrics": {
+            "change_pct": _safe_number(metrics["daily_change_pct"]),
+            "gap_pct": _safe_number(metrics["gap_pct"]),
+            "candle_body_pct": _safe_number(metrics["candle_body_pct"]),
+            "vol_ratio": _safe_number(metrics["vol_ratio"]),
+            "value_ratio": _safe_number(metrics["value_ratio"]),
+            "trading_value": int(metrics["trading_value"]),
+        },
+        "strategies": strategy_debug,
+    }
