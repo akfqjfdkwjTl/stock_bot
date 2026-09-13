@@ -149,21 +149,20 @@ STOCK_NEWS_ALIASES: dict[str, list[str]] = {
 # 상충 문맥을 일반 규칙으로 관리합니다. 특정 기사 제목은 저장하지 않습니다.
 ENTITY_CONFLICT_CONTEXTS: dict[str, tuple[str, ...]] = {
     "SPORTS": (
-        "kbo", "야구", "경기", "선수", "투수", "타자", "홈런", "감독",
+        "스포츠", "경기", "선수", "감독", "코치", "구단", "팀", "시즌",
+        "승리", "패배", "우승", "득점", "실점", "맞대결", "제압", "꺾고", "잡는다",
+        "kbo", "야구", "투수", "타자", "홈런",
         "잠실", "승리", "패배", "nc", "이닝", "타율", "마운드", "득점",
         "선두", "연승", "연패", "순위", "게임 차", "게임차", "리그",
         "포스트시즌", "포수", "내야수", "외야수", "안타", "삼진",
+        "배구", "v리그", "세트", "서브", "블로킹", "스파이크",
+        "축구", "k리그", "골", "승점", "공격수", "수비수", "미드필더",
+        "농구", "kbl", "쿼터", "리바운드", "덩크",
         "[사진]", "[포토]", "포토뉴스",
     ),
     "ENTERTAINMENT": (
         "배우", "가수", "방송", "드라마", "예능", "영화", "팬미팅", "콘서트",
     ),
-}
-
-# 동명의 스포츠팀·인물·브랜드가 실제로 존재하는 종목만 엄격 판정을 켭니다.
-# 새 사례는 기사 제목이 아니라 종목과 상충 엔티티 종류를 이 표에 추가합니다.
-AMBIGUOUS_ENTITY_PROFILES: dict[str, set[str]] = {
-    "두산": {"SPORTS"},
 }
 
 CORPORATE_CONTEXT_KEYWORDS: tuple[str, ...] = (
@@ -265,10 +264,37 @@ def _validate_news_entity(
         return False, f"MISMATCH_{strongest_conflict}"
     if strongest_hits >= 2 and corporate_hits == 0:
         return False, f"MISMATCH_{strongest_conflict}"
-    ambiguous_contexts = AMBIGUOUS_ENTITY_PROFILES.get(stock_name, set())
-    if strongest_conflict in ambiguous_contexts and strongest_hits >= 1 and corporate_hits == 0:
-        return False, f"MISMATCH_{strongest_conflict}"
     return True, "MATCH_CORPORATE_CONTEXT" if corporate_hits else "MATCH_NAME"
+
+
+def _classify_news_relevance(
+    stock_name: str,
+    ticker: str,
+    item: dict[str, str],
+    base_theme: str,
+) -> str:
+    """Entity 검증을 통과한 기사를 DIRECT/SECTOR/WEAK로 분류합니다."""
+    is_match, reason = _validate_news_entity(stock_name, ticker, item)
+    if not is_match:
+        return "MISMATCH"
+
+    title = _normalize_text(item.get("title", ""))
+    body = _normalize_text(f"{item.get('title', '')} {item.get('description', '')}")
+    normalized_ticker = str(ticker or "").strip().zfill(6) if ticker else ""
+    if normalized_ticker and normalized_ticker in body:
+        return "DIRECT"
+    if any(_contains_alias(title, alias) for alias in _stock_aliases(stock_name)):
+        return "DIRECT"
+
+    allowed_themes = RELATED_NEWS_THEMES.get(base_theme, set())
+    if any(
+        any(_contains_theme_keyword(body, keyword) for keyword in THEME_KEYWORDS.get(theme, []))
+        for theme in allowed_themes
+    ):
+        return "SECTOR"
+    if reason == "MATCH_CORPORATE_CONTEXT":
+        return "DIRECT"
+    return "WEAK"
 
 
 def _build_rss_url(stock_name: str) -> str:
@@ -357,6 +383,7 @@ def _collect_relevant_news_items(
     stock_name: str,
     items: list[dict[str, str]],
     ticker: str = "",
+    base_theme: str = "",
 ) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
     """직접 언급 기사 중 기업 엔티티가 확인된 기사와 불일치 기사를 분리합니다."""
     matched: list[dict[str, str]] = []
@@ -364,10 +391,11 @@ def _collect_relevant_news_items(
     for item in items:
         if not _is_direct_stock_news(stock_name, item):
             continue
-        is_match, reason = _validate_news_entity(stock_name, ticker, item)
-        if is_match:
-            matched.append(item)
+        relevance = _classify_news_relevance(stock_name, ticker, item, base_theme)
+        if relevance != "MISMATCH":
+            matched.append({**item, "news_relevance": relevance})
         else:
+            _is_match, reason = _validate_news_entity(stock_name, ticker, item)
             mismatched.append({**item, "entity_mismatch_reason": reason})
     return matched, mismatched
 
@@ -464,6 +492,7 @@ def analyze_stock_news(
             stock_name,
             recent_items,
             ticker=ticker,
+            base_theme=base_theme,
         )
 
         if not recent_items or not relevant_items:
@@ -505,6 +534,11 @@ def analyze_stock_news(
         if primary_news_theme in SCORE_THEMES:
             news_score += 1
         news_score = min(news_score, 10)
+        relevance_priority = {"DIRECT": 3, "SECTOR": 2, "WEAK": 1}
+        news_relevance = max(
+            (item.get("news_relevance", "WEAK") for item in relevant_items),
+            key=lambda value: relevance_priority.get(value, 0),
+        )
 
         headline = unescape(relevant_items[0]["title"]).strip()
         issue_summary = _build_issue_summary(
@@ -522,7 +556,7 @@ def analyze_stock_news(
             "issue_summary": issue_summary,
             "news_score": news_score,
             "theme_score": news_score,
-            "news_relevance": "MATCH",
+            "news_relevance": news_relevance,
             "entity_mismatch_count": len(mismatched_items),
             "entity_mismatch_reasons": sorted(
                 {item["entity_mismatch_reason"] for item in mismatched_items}

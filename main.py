@@ -700,7 +700,12 @@ def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dic
         enriched["score_detail"] = _score_detail_from_entry(enriched)
         all_candidates.append(enriched)
 
-    selected = _select_diversified_candidates(all_candidates, SETTINGS.final_recommendation_limit)
+    selectable_candidates = [
+        row
+        for row in all_candidates
+        if row["recommendation_score"] >= SETTINGS.watch_min_score
+    ]
+    selected = _select_diversified_candidates(selectable_candidates, SETTINGS.final_recommendation_limit)
     ranked_candidates = sorted(
         all_candidates,
         key=lambda row: row["recommendation_score"],

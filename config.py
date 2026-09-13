@@ -39,6 +39,7 @@ class Settings:
     news_request_timeout: int = int(os.getenv("NEWS_REQUEST_TIMEOUT", "6"))
     grade_a_threshold: float = float(os.getenv("GRADE_A_THRESHOLD", "70"))
     grade_b_threshold: float = float(os.getenv("GRADE_B_THRESHOLD", os.getenv("WATCH_THRESHOLD", "60")))
+    watch_min_score: float = float(os.getenv("WATCH_MIN_SCORE", "40"))
     backtest_take_profit_pct: float = float(os.getenv("BACKTEST_TAKE_PROFIT_PCT", "10"))
     backtest_stop_loss_pct: float = float(os.getenv("BACKTEST_STOP_LOSS_PCT", "5"))
     backtest_hold_days: int = int(os.getenv("BACKTEST_HOLD_DAYS", "10"))

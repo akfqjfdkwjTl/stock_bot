@@ -9,6 +9,7 @@ from news_analyzer import (
     _build_issue_summary,
     _collect_theme_counts,
     _collect_relevant_news_items,
+    _classify_news_relevance,
     _validate_news_entity,
     analyze_stock_news,
     enrich_candidate_with_news,
@@ -49,6 +50,37 @@ class NewsEnrichmentTests(unittest.TestCase):
 
         self.assertFalse(matched)
         self.assertEqual(reason, "MISMATCH_SPORTS")
+
+    def test_gs_volleyball_article_is_entity_mismatch(self) -> None:
+        article = {
+            "title": "GS칼텍스, V리그 여자배구 3세트 승리",
+            "description": "감독과 선수들이 블로킹으로 경기를 제압했습니다.",
+        }
+
+        matched, reason = _validate_news_entity("GS", "078930", article)
+
+        self.assertFalse(matched)
+        self.assertEqual(reason, "MISMATCH_SPORTS")
+
+    def test_samsung_sdi_battery_article_is_direct(self) -> None:
+        article = {
+            "title": "삼성SDI 전고체 배터리 상용화 속도",
+            "description": "차세대 배터리 기술 경쟁이 확대되고 있습니다.",
+        }
+
+        relevance = _classify_news_relevance("삼성SDI", "006400", article, "2차전지")
+
+        self.assertEqual(relevance, "DIRECT")
+
+    def test_indirect_industry_article_is_sector_or_weak(self) -> None:
+        article = {
+            "title": "배터리 업종 투자 확대",
+            "description": "삼성SDI 관련 공급망 기대가 언급됐습니다.",
+        }
+
+        relevance = _classify_news_relevance("삼성SDI", "006400", article, "2차전지")
+
+        self.assertEqual(relevance, "SECTOR")
 
     def test_mismatched_articles_are_removed_before_theme_extraction(self) -> None:
         articles = [
