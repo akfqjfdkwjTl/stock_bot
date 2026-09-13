@@ -20,6 +20,7 @@ from strategies import (
 )
 
 VALID_STRATEGIES = ("short", "swing", "mid")
+_LISTING_METADATA_CACHE: pd.DataFrame | None = None
 
 
 SAMPLE_STOCKS: list[dict[str, str]] = [
@@ -208,14 +209,56 @@ def _select_real_symbols(listing_df: pd.DataFrame) -> pd.DataFrame:
         data = data.sort_values("Marcap", ascending=False)
 
     data = data.drop_duplicates(subset=[code_column]).head(SETTINGS.max_symbols)
-    data = data[[code_column, "Name"]].copy()
-    data.columns = ["Code", "Name"]
+    selected_columns = [code_column, "Name"]
+    selected_columns.extend(column for column in ("Sector", "Industry") if column in data.columns)
+    data = data[selected_columns].copy()
+    data = data.rename(columns={code_column: "Code"})
+    for column in ("Sector", "Industry"):
+        if column not in data.columns:
+            data[column] = ""
+        data[column] = data[column].fillna("").astype(str).str.strip()
+    data["Code"] = data["Code"].astype(str).str.zfill(6)
     return data.reset_index(drop=True)
+
+
+def _attach_listing_metadata(symbols: pd.DataFrame, description_df: pd.DataFrame) -> pd.DataFrame:
+    """가격 중심 KRX 목록에 KRX-DESC 업종과 주요제품 정보를 결합합니다."""
+    description = description_df.copy()
+    code_column = next(
+        (column for column in ("Symbol", "Code") if column in description.columns),
+        None,
+    )
+    if code_column is None:
+        raise ValueError("KRX-DESC 결과에 Code/Symbol 컬럼이 없습니다.")
+    for column in ("Sector", "Industry"):
+        if column not in description.columns:
+            description[column] = ""
+    description = description[[code_column, "Sector", "Industry"]].rename(
+        columns={code_column: "Code"}
+    )
+    description["Code"] = description["Code"].astype(str).str.zfill(6)
+    description = description.drop_duplicates(subset=["Code"])
+    base = symbols.drop(columns=["Sector", "Industry"], errors="ignore")
+    merged = base.merge(description, on="Code", how="left")
+    for column in ("Sector", "Industry"):
+        merged[column] = merged[column].fillna("").astype(str).str.strip()
+    return merged
+
+
+def _load_listing_metadata(fdr: Any) -> pd.DataFrame:
+    """느린 KRX-DESC 조회는 프로세스 수명 동안 한 번만 수행합니다."""
+    global _LISTING_METADATA_CACHE
+    if _LISTING_METADATA_CACHE is None:
+        _LISTING_METADATA_CACHE = fdr.StockListing("KRX-DESC")
+    return _LISTING_METADATA_CACHE.copy()
 
 
 def _fallback_real_symbols() -> pd.DataFrame:
     """KRX listing endpoint 장애 시 사용하는 보수적인 대형주 후보군입니다."""
-    return pd.DataFrame(FALLBACK_REAL_STOCKS).head(SETTINGS.max_symbols)
+    data = pd.DataFrame(FALLBACK_REAL_STOCKS).head(SETTINGS.max_symbols)
+    data["Sector"] = ""
+    data["Industry"] = ""
+    return data
 
 
 def _append_flat_row(flat_results: list[dict[str, Any]], strategy_name: str, row: dict[str, Any]) -> None:
@@ -250,6 +293,8 @@ def _append_flat_row(flat_results: list[dict[str, Any]], strategy_name: str, row
             "recent_news_keywords": row.get("recent_news_keywords", ""),
             "issue_summary": row.get("issue_summary", ""),
             "news_score": row.get("news_score", 0),
+            "listing_sector": row.get("listing_sector", ""),
+            "listing_industry": row.get("listing_industry", ""),
         }
     )
 
@@ -266,6 +311,11 @@ def _run_real_screening(
     try:
         listing_df = fdr.StockListing("KRX")
         target_symbols = _select_real_symbols(listing_df)
+        try:
+            description_df = _load_listing_metadata(fdr)
+            target_symbols = _attach_listing_metadata(target_symbols, description_df)
+        except Exception as exc:
+            print(f"KRX 업종 메타데이터 조회 실패, 기본 분류 사용: {exc}")
     except Exception as exc:
         print(f"KRX 종목 목록 조회 실패, fallback 후보군 사용: {exc}")
         target_symbols = _fallback_real_symbols()
@@ -285,6 +335,8 @@ def _run_real_screening(
     for row in target_symbols.itertuples(index=False):
         ticker = str(row.Code).zfill(6)
         name = str(row.Name)
+        listing_sector = str(getattr(row, "Sector", "") or "").strip()
+        listing_industry = str(getattr(row, "Industry", "") or "").strip()
 
         try:
             fetched = fdr.DataReader(ticker, start_date, end_date)
@@ -324,8 +376,18 @@ def _run_real_screening(
             continue
 
         ticker_results = _evaluate_dataframe(ticker, name, normalized, strategy_filter=strategy_filter)
+        for item in ticker_results:
+            if item.get("strategy") != "error":
+                item["listing_sector"] = listing_sector
+                item["listing_industry"] = listing_industry
+
         if any(item.get("strategy") != "error" for item in ticker_results):
-            news_info = analyze_stock_news(name, ticker=ticker)
+            news_info = analyze_stock_news(
+                name,
+                ticker=ticker,
+                sector=listing_sector,
+                industry=listing_industry,
+            )
         else:
             news_info = None
 

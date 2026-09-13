@@ -47,6 +47,13 @@ class Settings:
     min_price: int = 1000
     min_trading_value: int = 3_000_000_000
     max_daily_change_pct: float = 15.0
+    min_swing_daily_change_pct: float = float(os.getenv("MIN_SWING_DAILY_CHANGE_PCT", "-4"))
+    min_mid_daily_change_pct: float = float(os.getenv("MIN_MID_DAILY_CHANGE_PCT", "-4"))
+    min_mid_fallback_daily_change_pct: float = float(
+        os.getenv("MIN_MID_FALLBACK_DAILY_CHANGE_PCT", "-3")
+    )
+    max_gap_down_pct: float = float(os.getenv("MAX_GAP_DOWN_PCT", "-3"))
+    max_bearish_body_pct: float = float(os.getenv("MAX_BEARISH_BODY_PCT", "-4"))
 
     # 60일 이동평균과 기울기를 계산하려면 여유 있는 일봉이 필요합니다.
     min_history_rows: int = 66

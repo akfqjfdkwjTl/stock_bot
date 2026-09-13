@@ -39,9 +39,12 @@ STOCK_BASE_THEMES: dict[str, str] = {
     "HD현대": "조선/기계",
     "HD현대중공업": "조선/방산",
     "HD한국조선해양": "조선/기계",
+    "HD현대마린솔루션": "조선/서비스",
+    "가온전선": "전력",
     "현대차": "자동차",
     "기아": "자동차",
     "LG전자": "가전/전장",
+    "코웨이": "생활가전",
     "SK": "지주회사",
     "삼성전자": "반도체",
     "삼성전자우": "반도체",
@@ -97,8 +100,10 @@ STOCK_ISSUE_TEMPLATES: dict[str, dict[str, str]] = {
 RELATED_NEWS_THEMES: dict[str, set[str]] = {
     "조선/방산": {"방산", "전력", "데이터센터"},
     "조선/기계": {"전력", "방산"},
+    "조선/서비스": {"전력", "방산", "AI"},
     "자동차": {"자동차", "2차전지", "로봇", "AI"},
     "가전/전장": {"AI", "로봇", "자동차", "반도체"},
+    "생활가전": {"AI", "로봇"},
     "지주회사": {"반도체", "AI", "전력", "2차전지", "방산", "금융"},
     "반도체": {"반도체", "AI", "데이터센터", "전력"},
     "금융": {"금융"},
@@ -137,7 +142,7 @@ STOCK_NEWS_ALIASES: dict[str, list[str]] = {
     "하나금융지주": ["하나금융지주", "하나금융"],
     "신한지주": ["신한지주", "신한금융"],
     "KB금융": ["kb금융", "kb금융지주", "국민은행"],
-    "대한항공": ["대한항공", "korean air", "아시아나", "항공"],
+    "대한항공": ["대한항공", "korean air", "아시아나"],
 }
 
 
@@ -163,6 +168,38 @@ def _contains_alias(text: str, alias: str) -> bool:
         pattern = rf"(?<![a-z0-9]){re.escape(alias)}(?![a-z0-9])"
         return re.search(pattern, text) is not None
     return alias in text
+
+
+def _contains_theme_keyword(text: str, keyword: str) -> bool:
+    """EV/AI처럼 짧은 영문 키워드가 다른 영단어 일부로 잡히지 않게 합니다."""
+    normalized_keyword = _normalize_text(keyword)
+    if not normalized_keyword:
+        return False
+    if any("a" <= char <= "z" for char in normalized_keyword):
+        pattern = rf"(?<![a-z0-9]){re.escape(normalized_keyword)}(?![a-z0-9])"
+        return re.search(pattern, text) is not None
+    return normalized_keyword in text
+
+
+def infer_base_theme(sector: str = "", industry: str = "") -> str:
+    """KRX-DESC 업종/주요제품을 뉴스 테마의 보수적 허용 범위로 변환합니다."""
+    text = f"{sector} {industry}".lower()
+    mappings = (
+        (("반도체",), "반도체"),
+        (("전선", "변압기", "전력", "송전", "배전"), "전력"),
+        (("자동차", "자동차부품"), "자동차"),
+        (("선박", "조선"), "조선/기계"),
+        (("은행", "금융", "보험", "증권"), "금융"),
+        (("전자부품", "전자 부품"), "전자부품"),
+        (("소프트웨어", "정보서비스", "인터넷", "통신"), "인터넷/플랫폼"),
+        (("의약", "바이오"), "바이오"),
+        (("항공", "운송"), "항공"),
+        (("가정용 기기", "생활가전", "생활용품"), "생활가전"),
+    )
+    for keywords, theme in mappings:
+        if any(keyword in text for keyword in keywords):
+            return theme
+    return ""
 
 
 def _is_direct_stock_news(stock_name: str, item: dict[str, str]) -> bool:
@@ -213,26 +250,43 @@ def _filter_recent_items(items: list[dict[str, str]]) -> list[dict[str, str]]:
 def _collect_theme_counts(
     items: list[dict[str, str]],
     base_theme: str,
+    stock_name: str = "",
 ) -> tuple[Counter, dict[str, int]]:
     theme_counts: Counter[str] = Counter()
     repeated_article_hits: dict[str, int] = defaultdict(int)
-    allowed_themes = RELATED_NEWS_THEMES.get(base_theme, set())
+    title_hits: Counter[str] = Counter()
+    allowed_themes = RELATED_NEWS_THEMES.get(base_theme)
+    stock_aliases = sorted(_stock_aliases(stock_name), key=len, reverse=True) if stock_name else []
 
     for item in items:
+        title = _normalize_text(item["title"])
         body = _normalize_text(f"{item['title']} {item['description']}")
+        for alias in stock_aliases:
+            title = title.replace(alias, " ")
+            body = body.replace(alias, " ")
         matched_in_article: set[str] = set()
         for theme, aliases in THEME_KEYWORDS.items():
-            if allowed_themes and theme not in allowed_themes:
+            if allowed_themes is not None and theme not in allowed_themes:
                 continue
-            for alias in aliases:
-                if alias.lower() in body:
-                    theme_counts[theme] += 1
-                    matched_in_article.add(theme)
-                    break
+            if any(_contains_theme_keyword(body, alias) for alias in aliases):
+                theme_counts[theme] += 1
+                matched_in_article.add(theme)
+                if any(_contains_theme_keyword(title, alias) for alias in aliases):
+                    title_hits[theme] += 1
         for theme in matched_in_article:
             repeated_article_hits[theme] += 1
 
-    return theme_counts, repeated_article_hits
+    # 제목에서 확인되거나 서로 다른 기사 두 건 이상에서 반복된 테마만 인정합니다.
+    credible_themes = {
+        theme
+        for theme in theme_counts
+        if title_hits[theme] > 0 or repeated_article_hits[theme] >= 2
+    }
+    filtered_counts = Counter({theme: count for theme, count in theme_counts.items() if theme in credible_themes})
+    filtered_repeats = {
+        theme: count for theme, count in repeated_article_hits.items() if theme in credible_themes
+    }
+    return filtered_counts, filtered_repeats
 
 
 def _collect_relevant_news_items(stock_name: str, items: list[dict[str, str]]) -> list[dict[str, str]]:
@@ -269,6 +323,10 @@ def _build_issue_summary(
     if not headline and not recent_keywords:
         return "특이 이슈 없음 (기술적 흐름 기반)"
 
+    if not primary_theme and headline:
+        short_headline = headline.split(" - ")[0].strip()
+        return f"최근 기사에서는 '{short_headline}' 이슈가 확인됐습니다. 뉴스 테마 점수에는 반영하지 않았습니다."
+
     stock_templates = STOCK_ISSUE_TEMPLATES.get(stock_name, {})
     theme_sentence = (
         stock_templates.get(primary_theme)
@@ -293,14 +351,20 @@ def _build_issue_summary(
     return f"최근 뉴스에서는 '{short_headline}' 이슈가 투자심리를 자극하는 모습입니다."
 
 
-def analyze_stock_news(stock_name: str, ticker: str = "") -> dict[str, Any]:
+def analyze_stock_news(
+    stock_name: str,
+    ticker: str = "",
+    sector: str = "",
+    industry: str = "",
+) -> dict[str, Any]:
     """
     Fetch recent news for a stock and convert it into theme/keyword signals.
     News failures never raise; they return a safe default structure.
     """
+    base_theme = STOCK_BASE_THEMES.get(stock_name) or infer_base_theme(sector, industry)
     default_result = {
         "theme": "",
-        "base_theme": STOCK_BASE_THEMES.get(stock_name, ""),
+        "base_theme": base_theme,
         "recent_news_keywords": [],
         "issue_summary": "특이 이슈 없음 (기술적 흐름 기반)",
         "news_score": 0,
@@ -322,8 +386,11 @@ def analyze_stock_news(stock_name: str, ticker: str = "") -> dict[str, Any]:
                 "issue_summary": "특이 이슈 없음 (기술적 흐름 기반)",
             }
 
-        base_theme = STOCK_BASE_THEMES.get(stock_name, "")
-        theme_counts, repeated_hits = _collect_theme_counts(relevant_items, base_theme)
+        theme_counts, repeated_hits = _collect_theme_counts(
+            relevant_items,
+            base_theme,
+            stock_name=stock_name,
+        )
         primary_news_theme = theme_counts.most_common(1)[0][0] if theme_counts else ""
         repeated_keywords = sorted(
             [theme for theme, count in repeated_hits.items() if count >= 2],
@@ -347,7 +414,7 @@ def analyze_stock_news(stock_name: str, ticker: str = "") -> dict[str, Any]:
         headline = unescape(relevant_items[0]["title"]).strip()
         issue_summary = _build_issue_summary(
             stock_name=stock_name,
-            primary_theme=primary_news_theme or final_theme or "기타",
+            primary_theme=primary_news_theme,
             recent_keywords=recent_keywords,
             repeated_keywords=repeated_keywords,
             headline=headline,

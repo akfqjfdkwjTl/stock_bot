@@ -96,6 +96,8 @@ def _calculate_common_metrics(df: pd.DataFrame) -> Optional[dict[str, Any]]:
         return None
 
     daily_change_pct = ((latest["종가"] / prev["종가"]) - 1) * 100
+    gap_pct = ((latest["시가"] / prev["종가"]) - 1) * 100
+    candle_body_pct = ((latest["종가"] / latest["시가"]) - 1) * 100
     trading_value = latest["value"]
 
     if trading_value < SETTINGS.min_trading_value:
@@ -130,6 +132,8 @@ def _calculate_common_metrics(df: pd.DataFrame) -> Optional[dict[str, Any]]:
         "latest": latest,
         "prev": prev,
         "daily_change_pct": daily_change_pct,
+        "gap_pct": gap_pct,
+        "candle_body_pct": candle_body_pct,
         "trading_value": trading_value,
         "vol_ratio": vol_ratio,
         "value_ratio": value_ratio,
@@ -148,6 +152,15 @@ def _calculate_common_metrics(df: pd.DataFrame) -> Optional[dict[str, Any]]:
         "ma20_slope": ma20_slope,
         "ma60_slope": ma60_slope,
     }
+
+
+def _passes_downside_risk_filter(metrics: dict[str, Any], min_daily_change_pct: float) -> bool:
+    """급락, 큰 갭 하락, 장대음봉 신호를 후보 단계에서 제거합니다."""
+    return (
+        metrics["daily_change_pct"] >= min_daily_change_pct
+        and metrics["gap_pct"] >= SETTINGS.max_gap_down_pct
+        and metrics["candle_body_pct"] >= SETTINGS.max_bearish_body_pct
+    )
 
 
 def _score_liquidity(metrics: dict[str, Any]) -> int:
@@ -422,6 +435,9 @@ def evaluate_swing_strategy(ticker: str, name: str, df: pd.DataFrame) -> Optiona
 
     latest = metrics["latest"]
 
+    if not _passes_downside_risk_filter(metrics, SETTINGS.min_swing_daily_change_pct):
+        return None
+
     box_range_pct = metrics["box_range_pct"]
     if metrics["trading_value"] < 5_000_000_000:
         return None
@@ -546,6 +562,9 @@ def evaluate_mid_strategy(ticker: str, name: str, df: pd.DataFrame) -> Optional[
 
     latest = metrics["latest"]
 
+    if not _passes_downside_risk_filter(metrics, SETTINGS.min_mid_daily_change_pct):
+        return None
+
     if metrics["ma20_slope"] <= 0 or metrics["ma60_slope"] <= -0.01:
         return None
     if not (latest["종가"] > latest["ma20"] > latest["ma60"]):
@@ -593,11 +612,13 @@ def evaluate_mid_fallback(ticker: str, name: str, df: pd.DataFrame) -> Optional[
 
     latest = metrics["latest"]
 
-    if metrics["ma20_slope"] <= -0.05 or metrics["ma60_slope"] <= -0.10:
+    if not _passes_downside_risk_filter(metrics, SETTINGS.min_mid_fallback_daily_change_pct):
         return None
-    if latest["종가"] <= latest["ma60"] * 0.80:
+    if metrics["ma20_slope"] < 0 or metrics["ma60_slope"] <= -0.10:
         return None
-    if latest["종가"] < metrics["high60"] * 0.70:
+    if latest["종가"] <= latest["ma20"] * 0.97:
+        return None
+    if latest["종가"] < metrics["high60"] * 0.85:
         return None
 
     stop_price = latest["ma20"] * 0.96

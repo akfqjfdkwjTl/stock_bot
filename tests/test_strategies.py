@@ -6,7 +6,7 @@ import unittest
 
 import pandas as pd
 
-from strategies import _score_risk_reward
+from strategies import _passes_downside_risk_filter, _score_risk_reward
 
 
 class RiskRewardScoreTests(unittest.TestCase):
@@ -49,6 +49,35 @@ class RiskRewardScoreTests(unittest.TestCase):
         )
 
         self.assertEqual(score, 0)
+
+
+class DownsideRiskFilterTests(unittest.TestCase):
+    def test_rejects_large_daily_drop(self) -> None:
+        metrics = {
+            "daily_change_pct": -4.5,
+            "gap_pct": -1.0,
+            "candle_body_pct": -2.0,
+        }
+
+        self.assertFalse(_passes_downside_risk_filter(metrics, -4.0))
+
+    def test_rejects_large_gap_down(self) -> None:
+        metrics = {
+            "daily_change_pct": -2.0,
+            "gap_pct": -3.5,
+            "candle_body_pct": 1.0,
+        }
+
+        self.assertFalse(_passes_downside_risk_filter(metrics, -4.0))
+
+    def test_accepts_orderly_pullback(self) -> None:
+        metrics = {
+            "daily_change_pct": -1.5,
+            "gap_pct": -0.5,
+            "candle_body_pct": -1.0,
+        }
+
+        self.assertTrue(_passes_downside_risk_filter(metrics, -3.0))
 
 
 if __name__ == "__main__":
