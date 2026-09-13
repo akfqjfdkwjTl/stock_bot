@@ -38,6 +38,7 @@ from config import SETTINGS
 from main import (
     UNCLASSIFIED_SECTOR,
     _build_strategy_recommendations,
+    _build_final_recommendations,
     _can_add_candidate,
     _grade_for_score,
     _normalize_listing_sector,
@@ -47,6 +48,40 @@ from main import (
 
 
 class RecommendationSettingsTests(unittest.TestCase):
+    def test_watch_candidates_below_configured_minimum_are_not_selected(self) -> None:
+        strategy_results = {
+            "short": [],
+            "swing": [],
+            "mid": [
+                {
+                    "ticker": "105560",
+                    "name": "KB금융",
+                    "current_price": 1000,
+                    "change_pct": 0,
+                    "trading_value": SETTINGS.min_trading_value,
+                    "total_score": 54,
+                    "theme": "기타",
+                    "news_score": 0,
+                },
+                {
+                    "ticker": "005930",
+                    "name": "삼성전자",
+                    "current_price": 1000,
+                    "change_pct": 0,
+                    "trading_value": SETTINGS.min_trading_value,
+                    "total_score": 52,
+                    "theme": "기타",
+                    "news_score": 0,
+                },
+            ],
+        }
+
+        with patch.object(SETTINGS, "watch_min_score", 40):
+            result = _build_final_recommendations(strategy_results)
+
+        self.assertEqual([item["ticker"] for item in result["selected"]], ["105560"])
+        self.assertEqual(result["selected"][0]["recommendation_score"], 40.5)
+
     def test_grade_thresholds_come_from_settings(self) -> None:
         with (
             patch.object(SETTINGS, "grade_a_threshold", 75),
