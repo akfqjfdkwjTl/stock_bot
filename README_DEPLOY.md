@@ -259,6 +259,50 @@ sudo systemctl start stockbot
 sudo systemctl status stockbot
 ```
 
+
+## 12. Work → GitHub → Oracle 자동 배포
+
+현재 운영 경로(`/home/ubuntu/stock_bot`)와 PM2 프로세스(`stock-bot`, `stock-web`)는
+`deploy.sh`에서 그대로 관리합니다. `main` 브랜치에 변경이 합쳐지면
+`.github/workflows/deploy-oracle.yml`이 테스트 통과 후 서버의 `deploy.sh main`을 실행합니다.
+
+GitHub 저장소의 `Settings → Environments → New environment`에서 `production` 환경을 만들고,
+`Settings → Secrets and variables → Actions`에 아래 Repository secrets를 등록합니다.
+
+- `ORACLE_HOST`: Oracle 서버 공인 IP 또는 호스트명
+- `ORACLE_USER`: `ubuntu`
+- `ORACLE_SSH_PRIVATE_KEY`: 서버 접속용 개인키의 전체 내용
+- `ORACLE_KNOWN_HOSTS`: Oracle 서버의 SSH host key 한 줄
+
+Windows PowerShell에서 host key는 다음처럼 확인할 수 있습니다.
+
+```powershell
+ssh-keyscan -t ed25519 168.110.116.149
+```
+
+출력된 `168.110.116.149 ssh-ed25519 ...` 한 줄을 `ORACLE_KNOWN_HOSTS`에 저장합니다.
+개인키와 텔레그램 토큰은 저장소 파일이나 채팅에 붙여 넣지 않습니다.
+
+최초 1회 서버에서 현재 SSH 키로 비밀번호 없이 접속되는지와 배포 스크립트를 확인합니다.
+
+```bash
+cd /home/ubuntu/stock_bot
+chmod +x deploy.sh
+./deploy.sh main
+pm2 save
+```
+
+이후 배포 흐름은 다음과 같습니다.
+
+1. Work가 별도 브랜치에서 최소 범위로 수정
+2. 관련 테스트 실행
+3. 커밋·푸시 후 Pull Request 생성
+4. `main` 병합
+5. GitHub Actions가 전체 단위 테스트 실행
+6. 성공 시 Oracle 서버에서 `git pull` 및 PM2 두 프로세스 재기동
+
+수동 재배포가 필요하면 GitHub의 `Actions → Test and deploy to Oracle → Run workflow`를 사용합니다.
+
 로그 확인:
 
 ```bash
