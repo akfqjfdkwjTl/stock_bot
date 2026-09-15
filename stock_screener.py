@@ -10,6 +10,7 @@ import pandas as pd
 from config import SETTINGS
 from news_analyzer import analyze_stock_news, enrich_candidate_with_news
 from strategies import (
+    attach_relative_strength,
     evaluate_mid_fallback,
     evaluate_mid_strategy,
     evaluate_short_fallback,
@@ -153,10 +154,12 @@ def _evaluate_dataframe(
     name: str,
     raw_df: pd.DataFrame,
     strategy_filter: str | None = None,
+    benchmark_df: pd.DataFrame | None = None,
 ) -> list[dict[str, Any]]:
     """일봉 데이터 하나를 세 전략으로 평가합니다."""
     results: list[dict[str, Any]] = []
     df = prepare_indicators(raw_df)
+    df = attach_relative_strength(df, benchmark_df)
     evaluator_map = {
         "short": (evaluate_short_strategy, evaluate_short_fallback),
         "swing": (evaluate_swing_strategy, evaluate_swing_fallback),
@@ -211,9 +214,12 @@ def _select_real_symbols(listing_df: pd.DataFrame) -> pd.DataFrame:
 
     data = data.drop_duplicates(subset=[code_column]).head(SETTINGS.max_symbols)
     selected_columns = [code_column, "Name"]
-    selected_columns.extend(column for column in ("Sector", "Industry") if column in data.columns)
+    selected_columns.extend(column for column in ("Market", "Sector", "Industry") if column in data.columns)
     data = data[selected_columns].copy()
     data = data.rename(columns={code_column: "Code"})
+    if "Market" not in data.columns:
+        data["Market"] = "KOSPI"
+    data["Market"] = data["Market"].fillna("KOSPI").astype(str).str.strip()
     for column in ("Sector", "Industry"):
         if column not in data.columns:
             data[column] = ""
@@ -257,6 +263,7 @@ def _load_listing_metadata(fdr: Any) -> pd.DataFrame:
 def _fallback_real_symbols() -> pd.DataFrame:
     """KRX listing endpoint 장애 시 사용하는 보수적인 대형주 후보군입니다."""
     data = pd.DataFrame(FALLBACK_REAL_STOCKS).head(SETTINGS.max_symbols)
+    data["Market"] = "KOSPI"
     data["Sector"] = ""
     data["Industry"] = ""
     return data
@@ -284,12 +291,21 @@ def _append_flat_row(flat_results: list[dict[str, Any]], strategy_name: str, row
             "score_breakout": row["score_breakout"],
             "score_box": row["score_box"],
             "score_vcp": row["score_vcp"],
+            "score_rs": row["score_rs"],
             "score_risk": row["score_risk"],
             "score_overheat": row["score_overheat"],
             "box_high": row.get("box_high", 0),
             "box_low": row.get("box_low", 0),
             "box_range_pct": row.get("box_range_pct", 0),
             "vcp_score": row.get("vcp_score", 0),
+            "high52_ratio": row.get("high52_ratio", 0),
+            "high52_distance_pct": row.get("high52_distance_pct", 0),
+            "rs_1m": row.get("rs_1m", 0),
+            "rs_3m": row.get("rs_3m", 0),
+            "rs_6m": row.get("rs_6m", 0),
+            "volume_contraction_ratio": row.get("volume_contraction_ratio", 0),
+            "volume_contraction": row.get("volume_contraction", False),
+            "pivot_ready": row.get("pivot_ready", False),
             "theme": row.get("theme", ""),
             "recent_news_keywords": row.get("recent_news_keywords", ""),
             "issue_summary": row.get("issue_summary", ""),
@@ -334,12 +350,19 @@ def _run_real_screening(
         "mid": [],
     }
     errors: list[dict[str, Any]] = []
+    benchmarks: dict[str, pd.DataFrame | None] = {"KOSPI": None, "KOSDAQ": None}
+    for market, symbol in (("KOSPI", "KS11"), ("KOSDAQ", "KQ11")):
+        try:
+            benchmarks[market] = fdr.DataReader(symbol, start_date, end_date)
+        except Exception as exc:
+            print(f"{market} RS 기준지수 조회 실패, RS 점수 제외: {exc}")
 
     for row in target_symbols.itertuples(index=False):
         ticker = str(row.Code).zfill(6)
         name = str(row.Name)
         listing_sector = str(getattr(row, "Sector", "") or "").strip()
         listing_industry = str(getattr(row, "Industry", "") or "").strip()
+        market = str(getattr(row, "Market", "KOSPI") or "KOSPI").strip()
 
         try:
             fetched = fdr.DataReader(ticker, start_date, end_date)
@@ -378,7 +401,13 @@ def _run_real_screening(
             )
             continue
 
-        ticker_results = _evaluate_dataframe(ticker, name, normalized, strategy_filter=strategy_filter)
+        ticker_results = _evaluate_dataframe(
+            ticker,
+            name,
+            normalized,
+            strategy_filter=strategy_filter,
+            benchmark_df=benchmarks.get(market),
+        )
         for item in ticker_results:
             if item.get("strategy") != "error":
                 item["listing_sector"] = listing_sector
@@ -511,7 +540,13 @@ def debug_symbol(ticker_or_name: str) -> dict[str, Any]:
     start_date = end_date - timedelta(days=SETTINGS.history_calendar_days)
     fetched = fdr.DataReader(ticker, start_date, end_date)
     normalized = _normalize_ohlcv(fetched)
-    prepared = prepare_indicators(normalized)
+    market = str(row.get("Market", "KOSPI") or "KOSPI").strip()
+    benchmark_symbol = "KQ11" if market == "KOSDAQ" else "KS11"
+    try:
+        benchmark = fdr.DataReader(benchmark_symbol, start_date, end_date)
+    except Exception:
+        benchmark = None
+    prepared = attach_relative_strength(prepare_indicators(normalized), benchmark)
     diagnostic = diagnose_strategy_filters(ticker, name, prepared)
     news_info = analyze_stock_news(
         name,

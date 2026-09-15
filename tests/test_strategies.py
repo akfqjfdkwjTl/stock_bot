@@ -9,10 +9,55 @@ import pandas as pd
 from stock_screener import _build_sample_ohlcv
 from strategies import (
     _passes_downside_risk_filter,
+    _score_breakout,
+    _score_relative_strength,
     _score_risk_reward,
+    _score_vcp,
+    attach_relative_strength,
     diagnose_strategy_filters,
     prepare_indicators,
 )
+
+
+class TechnicalStrengthScoreTests(unittest.TestCase):
+    def test_52week_high_proximity_reuses_breakout_bucket(self) -> None:
+        metrics = {
+            "latest": pd.Series({"종가": 96.0}),
+            "high60": 120.0,
+            "box_high": 120.0,
+            "high52_ratio": 0.96,
+        }
+
+        self.assertEqual(_score_breakout(metrics), 8)
+
+    def test_relative_strength_ignores_latest_day_spike(self) -> None:
+        dates = pd.bdate_range("2026-01-01", periods=150)
+        market_close = pd.Series(range(100, 250), index=dates, dtype=float)
+        stock_close = market_close.copy()
+        stock_close.iloc[-1] *= 2
+        stock = pd.DataFrame({"종가": stock_close}, index=dates)
+        market = pd.DataFrame({"Close": market_close}, index=dates)
+
+        result = attach_relative_strength(stock, market).iloc[-1]
+
+        self.assertAlmostEqual(result["rs_1m"], 0.0)
+        self.assertAlmostEqual(result["rs_3m"], 0.0)
+        self.assertAlmostEqual(result["rs_6m"], 0.0)
+
+    def test_persistent_relative_strength_receives_all_period_points(self) -> None:
+        metrics = {"rs_1m": 1.0, "rs_3m": 2.0, "rs_6m": 3.0}
+
+        self.assertEqual(_score_relative_strength(metrics), 10)
+
+    def test_vcp_adds_volume_contraction_inside_existing_bucket(self) -> None:
+        metrics = {
+            "recent_volatility": 1.0,
+            "previous_volatility": 2.0,
+            "staged_contraction": True,
+            "volume_contraction": True,
+        }
+
+        self.assertEqual(_score_vcp(metrics), 12)
 
 
 class RiskRewardScoreTests(unittest.TestCase):
