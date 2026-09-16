@@ -45,9 +45,14 @@ class TechnicalStrengthScoreTests(unittest.TestCase):
         self.assertAlmostEqual(result["rs_6m"], 0.0)
 
     def test_persistent_relative_strength_receives_all_period_points(self) -> None:
-        metrics = {"rs_1m": 1.0, "rs_3m": 2.0, "rs_6m": 3.0}
+        metrics = {"rs_1m": 2.0, "rs_3m": 3.0, "rs_6m": 5.0}
 
         self.assertEqual(_score_relative_strength(metrics), 10)
+
+    def test_near_zero_relative_strength_does_not_receive_points(self) -> None:
+        metrics = {"rs_1m": 0.01, "rs_3m": 0.01, "rs_6m": 0.01}
+
+        self.assertEqual(_score_relative_strength(metrics), 0)
 
     def test_vcp_adds_volume_contraction_inside_existing_bucket(self) -> None:
         metrics = {
