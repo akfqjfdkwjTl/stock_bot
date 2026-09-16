@@ -130,6 +130,7 @@ SCORE_DETAIL_FIELDS = (
     "score_breakout",
     "score_box",
     "score_vcp",
+    "score_rs",
     "score_risk",
     "score_overheat",
 )
@@ -314,6 +315,18 @@ def _summarize_recommendation_reason(candidate: dict) -> str:
 def _copy_score_fields(entry: dict, item: dict) -> None:
     for field in SCORE_DETAIL_FIELDS:
         entry[field] = item.get(field, entry.get(field, 0))
+    for field in (
+        "high52_ratio",
+        "high52_distance_pct",
+        "rs_1m",
+        "rs_3m",
+        "rs_6m",
+        "staged_contraction",
+        "volume_contraction_ratio",
+        "volume_contraction",
+        "pivot_ready",
+    ):
+        entry[field] = item.get(field, entry.get(field, 0))
 
 
 def _score_detail_from_entry(entry: dict) -> dict:
@@ -321,6 +334,7 @@ def _score_detail_from_entry(entry: dict) -> dict:
         entry.get("score_breakout", 0)
         + entry.get("score_box", 0)
         + entry.get("score_vcp", 0)
+        + entry.get("score_rs", 0)
         + entry.get("score_risk", 0)
         + entry.get("score_overheat", 0)
     )
@@ -973,6 +987,22 @@ def build_message(
             lines.append(f"등락률: {item['change_pct']}%")
             lines.append(f"거래대금: {_format_currency(item['trading_value'])}")
             lines.append(f"총점: {item['total_score']}점")
+            lines.append(f"52주 고점거리: {item.get('high52_distance_pct', 0):.2f}%")
+            lines.append(
+                "RS: "
+                f"1개월 {item.get('rs_1m', 0):+.2f}%p / "
+                f"3개월 {item.get('rs_3m', 0):+.2f}%p / "
+                f"6개월 {item.get('rs_6m', 0):+.2f}%p "
+                f"({item.get('score_rs', 0)}점)"
+            )
+            lines.append(
+                f"VCP: {item.get('score_vcp', 0)}점 / "
+                f"단계적 축소 {'예' if item.get('staged_contraction') else '아니오'}"
+            )
+            lines.append(
+                f"거래량수축: {'예' if item.get('volume_contraction') else '아니오'} "
+                f"({item.get('volume_contraction_ratio', 0):.2f}배)"
+            )
             lines.append(f"주요 테마: {item.get('theme', '기타') or '기타'}")
             lines.append(f"최근 뉴스 키워드: {item.get('recent_news_keywords', '없음') or '없음'}")
             lines.append(f"이슈 요약: {item.get('issue_summary', '최근 이슈 없음') or '최근 이슈 없음'}")

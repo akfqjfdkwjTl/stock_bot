@@ -49,6 +49,42 @@ def prepare_indicators(df: pd.DataFrame) -> pd.DataFrame:
     return data
 
 
+def attach_relative_strength(df: pd.DataFrame, benchmark_df: Optional[pd.DataFrame]) -> pd.DataFrame:
+    """전일 종가 기준 1·3·6개월 시장 대비 초과수익률을 붙입니다."""
+    data = df.copy()
+    for column in ("rs_1m", "rs_3m", "rs_6m"):
+        data[column] = 0.0
+
+    if benchmark_df is None or benchmark_df.empty or len(data) < 3:
+        return data
+
+    benchmark_close_column = "종가" if "종가" in benchmark_df.columns else "Close"
+    if benchmark_close_column not in benchmark_df.columns:
+        return data
+
+    aligned = pd.concat(
+        [
+            pd.to_numeric(data["종가"], errors="coerce").rename("stock"),
+            pd.to_numeric(benchmark_df[benchmark_close_column], errors="coerce").rename("market"),
+        ],
+        axis=1,
+        join="inner",
+    ).dropna()
+    # 오늘 하루 급등이 RS 전체를 왜곡하지 않도록 완성된 전 거래일까지 계산합니다.
+    completed = aligned.iloc[:-1]
+    if completed.empty:
+        return data
+
+    latest_index = data.index[-1]
+    for column, sessions in (("rs_1m", 21), ("rs_3m", 63), ("rs_6m", 126)):
+        if len(completed) <= sessions:
+            continue
+        stock_return = (completed["stock"].iloc[-1] / completed["stock"].iloc[-sessions - 1]) - 1
+        market_return = (completed["market"].iloc[-1] / completed["market"].iloc[-sessions - 1]) - 1
+        data.at[latest_index, column] = (stock_return - market_return) * 100
+    return data
+
+
 def _safe_number(value: Any, digits: int = 2) -> float:
     """NaN이 섞여 있어도 화면 출력용 숫자를 안전하게 만듭니다."""
     if pd.isna(value):
@@ -125,6 +161,21 @@ def _calculate_common_metrics(df: pd.DataFrame) -> Optional[dict[str, Any]]:
     recent_20d_volatility = latest["range20"]
     vol5_ratio = _safe_ratio(latest["vol5"], latest["vol20"])
 
+    high52 = df["고가"].tail(252).max()
+    high52_ratio = _safe_ratio(latest["종가"], high52)
+    high52_distance_pct = (high52_ratio - 1) * 100 if high52_ratio else 0
+
+    pre_pivot_volume = df["거래량"].iloc[-6:-1].mean()
+    base_volume = df["거래량"].iloc[-26:-6].mean()
+    volume_contraction_ratio = _safe_ratio(pre_pivot_volume, base_volume)
+    volume_contraction = 0 < volume_contraction_ratio <= 0.85
+    staged_contraction = recent_20d_volatility > recent_10d_volatility > recent_5d_volatility
+    pivot_ready = (
+        volume_contraction
+        and latest["종가"] >= box_high * 0.95
+        and vol_ratio >= 1.2
+    )
+
     ma20_slope = latest["ma20"] - df.iloc[-6]["ma20"]
     ma60_slope = latest["ma60"] - df.iloc[-6]["ma60"]
 
@@ -149,6 +200,16 @@ def _calculate_common_metrics(df: pd.DataFrame) -> Optional[dict[str, Any]]:
         "recent_10d_volatility": recent_10d_volatility,
         "recent_20d_volatility": recent_20d_volatility,
         "vol5_ratio": vol5_ratio,
+        "high52": high52,
+        "high52_ratio": high52_ratio,
+        "high52_distance_pct": high52_distance_pct,
+        "rs_1m": _safe_number(latest.get("rs_1m", 0)),
+        "rs_3m": _safe_number(latest.get("rs_3m", 0)),
+        "rs_6m": _safe_number(latest.get("rs_6m", 0)),
+        "staged_contraction": staged_contraction,
+        "volume_contraction_ratio": volume_contraction_ratio,
+        "volume_contraction": volume_contraction,
+        "pivot_ready": pivot_ready,
         "ma20_slope": ma20_slope,
         "ma60_slope": ma60_slope,
     }
@@ -226,7 +287,18 @@ def _score_breakout(metrics: dict[str, Any], near_high: bool = False) -> int:
     if latest["종가"] > metrics["box_high"] * 0.995:
         score += 5
 
-    return min(score, 15)
+    high52_ratio = metrics.get("high52_ratio", 0)
+    if high52_ratio >= 0.98:
+        high52_score = 10
+    elif high52_ratio >= 0.95:
+        high52_score = 8
+    elif high52_ratio >= 0.90:
+        high52_score = 5
+    else:
+        high52_score = 0
+
+    # 60일/박스 돌파와 같은 추세 현상이므로 합산하지 않고 더 강한 값만 사용합니다.
+    return min(max(score, high52_score), 15)
 
 
 def _score_box_breakout(metrics: dict[str, Any]) -> int:
@@ -245,11 +317,29 @@ def _score_vcp(metrics: dict[str, Any]) -> int:
     if pd.isna(recent_vol) or pd.isna(prev_vol):
         return 0
 
+    score = 0
     if recent_vol < prev_vol * 0.7:
-        return 10
-    if recent_vol < prev_vol * 0.85:
-        return 7
-    return 0
+        score = 10
+    elif recent_vol < prev_vol * 0.85:
+        score = 7
+
+    if metrics.get("staged_contraction"):
+        score = max(score, 8)
+    if score and metrics.get("volume_contraction"):
+        score += 2
+    return min(score, 12)
+
+
+def _score_relative_strength(metrics: dict[str, Any]) -> int:
+    """기간별 초과수익이 지속될수록 가점하고 단일 기간 급등은 제한합니다."""
+    score = 0
+    if metrics.get("rs_1m", 0) > 0:
+        score += 2
+    if metrics.get("rs_3m", 0) > 0:
+        score += 3
+    if metrics.get("rs_6m", 0) > 0:
+        score += 5
+    return score
 
 
 def _score_risk_reward(
@@ -316,6 +406,7 @@ def _build_candidate(
         "score_breakout": score_parts["breakout"],
         "score_box": score_parts["box"],
         "score_vcp": score_parts["vcp"],
+        "score_rs": score_parts["rs"],
         "score_risk": score_parts["risk"],
         "score_overheat": score_parts["overheat"],
         "box_high": int(metrics["box_high"]) if not pd.isna(metrics["box_high"]) else 0,
@@ -327,6 +418,15 @@ def _build_candidate(
         "recent_20d_volatility": _safe_number(metrics.get("recent_20d_volatility")),
         "vol5_ratio": _safe_number(metrics.get("vol5_ratio")),
         "vol_ratio": _safe_number(metrics.get("vol_ratio")),
+        "high52_ratio": _safe_number(metrics.get("high52_ratio"), 4),
+        "high52_distance_pct": _safe_number(metrics.get("high52_distance_pct")),
+        "rs_1m": _safe_number(metrics.get("rs_1m")),
+        "rs_3m": _safe_number(metrics.get("rs_3m")),
+        "rs_6m": _safe_number(metrics.get("rs_6m")),
+        "staged_contraction": bool(metrics.get("staged_contraction")),
+        "volume_contraction_ratio": _safe_number(metrics.get("volume_contraction_ratio")),
+        "volume_contraction": bool(metrics.get("volume_contraction")),
+        "pivot_ready": bool(metrics.get("pivot_ready")),
     }
 
 
@@ -357,6 +457,7 @@ def evaluate_short_strategy(ticker: str, name: str, df: pd.DataFrame) -> Optiona
         "breakout": _score_breakout(metrics),
         "box": 0,
         "vcp": 0,
+        "rs": _score_relative_strength(metrics),
         "risk": _score_risk_reward(metrics, stop_price, target_price),
         "overheat": _score_not_overheated(metrics),
     }
@@ -403,6 +504,7 @@ def evaluate_short_fallback(ticker: str, name: str, df: pd.DataFrame) -> Optiona
         "breakout": _score_breakout(metrics),
         "box": 0,
         "vcp": 0,
+        "rs": _score_relative_strength(metrics),
         "risk": _score_risk_reward(metrics, stop_price, target_price),
         "overheat": _score_not_overheated(metrics),
     }
@@ -492,6 +594,8 @@ def evaluate_swing_strategy(ticker: str, name: str, df: pd.DataFrame) -> Optiona
         vcp_score = 17
     else:
         vcp_score = 14
+    if metrics.get("volume_contraction"):
+        vcp_score = min(vcp_score + 2, 20)
 
     if metrics["vol5_ratio"] >= 1.2 and metrics["vol_ratio"] >= 1.4:
         volume_score = 15
@@ -518,6 +622,7 @@ def evaluate_swing_strategy(ticker: str, name: str, df: pd.DataFrame) -> Optiona
         "breakout": breakout_score,
         "box": box_score,
         "vcp": vcp_score,
+        "rs": _score_relative_strength(metrics),
         "risk": 0,
         "overheat": _score_not_overheated(metrics),
     }
@@ -583,6 +688,7 @@ def evaluate_mid_strategy(ticker: str, name: str, df: pd.DataFrame) -> Optional[
         "breakout": _score_breakout(metrics, near_high=True),
         "box": _score_box_breakout(metrics),
         "vcp": _score_vcp(metrics),
+        "rs": _score_relative_strength(metrics),
         "risk": _score_risk_reward(metrics, stop_price, target_price),
         "overheat": _score_not_overheated(metrics),
     }
@@ -630,6 +736,7 @@ def evaluate_mid_fallback(ticker: str, name: str, df: pd.DataFrame) -> Optional[
         "breakout": _score_breakout(metrics, near_high=True),
         "box": _score_box_breakout(metrics),
         "vcp": _score_vcp(metrics),
+        "rs": _score_relative_strength(metrics),
         "risk": _score_risk_reward(metrics, stop_price, target_price),
         "overheat": _score_not_overheated(metrics),
     }

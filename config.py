@@ -33,7 +33,7 @@ class Settings:
 
     # 실데이터 조회 범위를 제한해서 실행 시간을 줄입니다.
     max_symbols: int = int(os.getenv("MAX_SYMBOLS", "100"))
-    history_calendar_days: int = int(os.getenv("HISTORY_CALENDAR_DAYS", "140"))
+    history_calendar_days: int = int(os.getenv("HISTORY_CALENDAR_DAYS", "400"))
     news_lookback_days: int = int(os.getenv("NEWS_LOOKBACK_DAYS", "3"))
     news_max_items: int = int(os.getenv("NEWS_MAX_ITEMS", "8"))
     news_request_timeout: int = int(os.getenv("NEWS_REQUEST_TIMEOUT", "6"))
