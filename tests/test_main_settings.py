@@ -21,7 +21,11 @@ _install_import_stub(
     refresh_market_json=lambda *args, **kwargs: None,
     save_dashboard_data=lambda *args, **kwargs: None,
 )
-_install_import_stub("db", save_recommendations=lambda *args, **kwargs: 0)
+_install_import_stub(
+    "db",
+    save_recommendations=lambda *args, **kwargs: 0,
+    save_tracked_stock=lambda *args, **kwargs: False,
+)
 _install_import_stub(
     "stock_screener",
     debug_symbol=lambda *args, **kwargs: {},
