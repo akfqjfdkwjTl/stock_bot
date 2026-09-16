@@ -776,16 +776,18 @@ def build_symbol_debug_message(ticker_or_name: str) -> str:
         symbol_info.get("listing_sector", ""),
         symbol_info.get("listing_industry", ""),
     )
-    save_tracked_stock(
-        source="search",
-        ticker=ticker,
-        name=diagnostic["name"],
-        reference_price=symbol_info["current_price"],
-        price_date=symbol_info.get("price_date", ""),
-        score=candidate.get("recommendation_score", 0) if candidate else 0,
-        strategy=candidate.get("strategy_type", "") if candidate else "",
-        sector=sector,
-    )
+    reference_price = symbol_info.get("current_price")
+    if reference_price:
+        save_tracked_stock(
+            source="search",
+            ticker=ticker,
+            name=diagnostic["name"],
+            reference_price=reference_price,
+            price_date=symbol_info.get("price_date", ""),
+            score=candidate.get("recommendation_score", 0) if candidate else 0,
+            strategy=candidate.get("strategy_type", "") if candidate else "",
+            sector=sector,
+        )
 
     failure_reason = diagnostic.get("failure_reason", "")
     if candidate and selected_position is None:
