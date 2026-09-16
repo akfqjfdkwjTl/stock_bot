@@ -47,6 +47,37 @@ class TelegramRecommendationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(send.await_count, 2)
         self.assertEqual(send.await_args_list[-1].args[2], "추천 결과")
 
+    async def test_search_accepts_stock_name(self) -> None:
+        update = SimpleNamespace(effective_chat=SimpleNamespace(id=1234))
+        context = SimpleNamespace(args=["SK하이닉스"], bot=SimpleNamespace())
+
+        with (
+            patch.object(telegram_bot, "send_text_chunks", new_callable=AsyncMock) as send,
+            patch.object(
+                telegram_bot.asyncio,
+                "to_thread",
+                new_callable=AsyncMock,
+                return_value="종목 진단 결과",
+            ) as to_thread,
+        ):
+            await telegram_bot.search_command(update, context)
+
+        to_thread.assert_awaited_once_with(
+            telegram_bot.build_symbol_debug_message,
+            "SK하이닉스",
+        )
+        self.assertEqual(send.await_count, 2)
+        self.assertEqual(send.await_args_list[-1].args[2], "종목 진단 결과")
+
+    async def test_search_without_name_shows_new_usage(self) -> None:
+        update = SimpleNamespace(effective_chat=SimpleNamespace(id=1234))
+        context = SimpleNamespace(args=[], bot=SimpleNamespace())
+
+        with patch.object(telegram_bot, "send_text_chunks", new_callable=AsyncMock) as send:
+            await telegram_bot.search_command(update, context)
+
+        self.assertIn("/search 종목명", send.await_args.args[2])
+
 
 if __name__ == "__main__":
     unittest.main()
