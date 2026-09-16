@@ -203,12 +203,23 @@ def _stock_aliases(stock_name: str) -> list[str]:
 
 
 def _contains_alias(text: str, alias: str) -> bool:
+    """회사명이 다른 단어·회사명의 일부로 포함된 경우는 일치로 보지 않습니다."""
     if not alias:
         return False
-    if len(alias) <= 3 and alias.isascii():
-        pattern = rf"(?<![a-z0-9]){re.escape(alias)}(?![a-z0-9])"
+
+    escaped_alias = re.escape(alias)
+    if any("가" <= char <= "힣" for char in alias):
+        # 회사명 뒤의 일반적인 한국어 조사는 허용하되, 에스엠벡셀·삼성전자우처럼
+        # 별도 회사명이 이어지는 부분 일치는 차단합니다.
+        particles = "은|는|이|가|을|를|의|와|과|도|만|에서|으로|로|측"
+        pattern = (
+            rf"(?<![가-힣a-z0-9]){escaped_alias}"
+            rf"(?:(?:{particles})(?![가-힣a-z0-9])|(?![가-힣a-z0-9]))"
+        )
         return re.search(pattern, text) is not None
-    return alias in text
+
+    pattern = rf"(?<![a-z0-9]){escaped_alias}(?![a-z0-9])"
+    return re.search(pattern, text) is not None
 
 
 def _contains_theme_keyword(text: str, keyword: str) -> bool:
@@ -267,7 +278,7 @@ def _validate_news_entity(
     corporate_hits = sum(keyword in body for keyword in CORPORATE_CONTEXT_KEYWORDS)
     normalized_name = _normalize_text(stock_name).replace(" ", "")
     configured_aliases = [
-        _normalize_text(alias).replace(" ", "")
+        _normalize_text(alias)
         for alias in STOCK_NEWS_ALIASES.get(stock_name, [])
     ]
     strong_alias_match = any(

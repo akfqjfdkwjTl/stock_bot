@@ -99,6 +99,44 @@ class NewsEnrichmentTests(unittest.TestCase):
 
         self.assertEqual(relevance, "DIRECT")
 
+    def test_sm_vexel_article_is_not_sm_news(self) -> None:
+        article = {
+            "title": "에스엠벡셀, 자진상폐 수순 밟나",
+            "description": "SM그룹 지분이 89%를 돌파하고 두 달째 장내매수를 이어갔습니다.",
+        }
+
+        matched, reason = _validate_news_entity("에스엠", "041510", article)
+        relevance = _classify_news_relevance(
+            "에스엠", "041510", article, "엔터/미디어"
+        )
+
+        self.assertFalse(matched)
+        self.assertEqual(reason, "NO_ENTITY_MENTION")
+        self.assertEqual(relevance, "MISMATCH")
+
+    def test_exact_korean_company_name_with_particle_is_allowed(self) -> None:
+        article = {
+            "title": "에스엠은 신인 아티스트 앨범을 공개했다",
+            "description": "엔터테인먼트 사업과 콘서트 계획도 발표했습니다.",
+        }
+
+        relevance = _classify_news_relevance(
+            "에스엠", "041510", article, "엔터/미디어"
+        )
+
+        self.assertEqual(relevance, "DIRECT")
+
+    def test_similar_listed_company_suffix_is_not_partial_match(self) -> None:
+        article = {
+            "title": "삼성전자우 배당 확대 기대",
+            "description": "우선주 투자 수요가 증가했습니다.",
+        }
+
+        matched, reason = _validate_news_entity("삼성전자", "005930", article)
+
+        self.assertFalse(matched)
+        self.assertEqual(reason, "NO_ENTITY_MENTION")
+
     def test_indirect_industry_article_is_sector_or_weak(self) -> None:
         article = {
             "title": "배터리 업종 투자 확대",
@@ -163,6 +201,31 @@ class NewsEnrichmentTests(unittest.TestCase):
         self.assertEqual(result["news_relevance"], "MISMATCH")
         self.assertEqual(result["news_score"], 0)
         self.assertNotIn("2차전지", result["recent_news_keywords"])
+
+    def test_sm_vexel_rss_item_is_excluded_from_sm_news(self) -> None:
+        class FakeResponse:
+            text = """<rss><channel><item><title>에스엠벡셀, 자진상폐 수순 밟나…SM그룹 지분 89% 돌파</title><description>두 달째 장내매수를 이어갔습니다.</description><pubDate>Sat, 12 Sep 2026 10:00:00 +0900</pubDate></item></channel></rss>"""
+
+            @staticmethod
+            def raise_for_status() -> None:
+                return None
+
+        with (
+            patch("news_analyzer.requests.get", return_value=FakeResponse()),
+            patch("news_analyzer.SETTINGS.news_lookback_days", 100),
+        ):
+            result = analyze_stock_news(
+                "에스엠",
+                ticker="041510",
+                sector="우량기업부",
+                industry="오디오물 출판 및 원판 녹음업",
+            )
+
+        self.assertEqual(result["theme"], "엔터/미디어")
+        self.assertEqual(result["news_relevance"], "NONE")
+        self.assertEqual(result["news_score"], 0)
+        self.assertEqual(result["news_items"], [])
+        self.assertNotIn("에스엠벡셀", result["issue_summary"])
 
     def test_news_score_does_not_change_technical_score(self) -> None:
         candidate = {
