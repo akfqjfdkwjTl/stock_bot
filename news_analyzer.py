@@ -29,6 +29,7 @@ THEME_KEYWORDS: dict[str, list[str]] = {
     "항공": ["항공", "대한항공", "아시아나", "운항", "노선", "조종사", "슬롯", "여객", "화물"],
     "여행": ["여행", "관광", "여객", "제주노선", "국제선"],
     "운송": ["운송", "물류", "화물", "항공화물"],
+    "엔터/미디어": ["엔터테인먼트", "음반", "앨범", "콘서트", "아티스트", "공연", "k팝", "아이돌"],
 }
 
 SCORE_THEMES = {"AI", "반도체", "전력", "2차전지", "데이터센터", "로봇", "방산"}
@@ -67,6 +68,7 @@ STOCK_BASE_THEMES: dict[str, str] = {
     "셀트리온": "바이오",
     "삼성바이오로직스": "바이오",
     "대한항공": "항공",
+    "에스엠": "엔터/미디어",
 }
 
 # 대표 종목은 산업 공통 문장보다 더 직접적인 투자 포인트를 우선 사용합니다.
@@ -115,6 +117,7 @@ RELATED_NEWS_THEMES: dict[str, set[str]] = {
     "바이오": set(),
     "항공": {"항공", "여행", "운송"},
     "항공/운송": {"항공", "여행", "운송"},
+    "엔터/미디어": {"엔터/미디어"},
 }
 
 THEME_SUMMARY_TEMPLATES: dict[str, str] = {
@@ -143,6 +146,15 @@ STOCK_NEWS_ALIASES: dict[str, list[str]] = {
     "신한지주": ["신한지주", "신한금융"],
     "KB금융": ["kb금융", "kb금융지주", "국민은행"],
     "대한항공": ["대한항공", "korean air", "아시아나"],
+    "에스엠": ["sm엔터테인먼트", "sm entertainment", "에스엠엔터테인먼트"],
+}
+
+# 짧거나 동명이인 가능성이 큰 종목명은 회사 고유 문맥이 함께 있어야 인정합니다.
+STOCK_ENTITY_CONTEXT_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "에스엠": (
+        "sm엔터테인먼트", "에스엠엔터테인먼트", "엔터테인먼트", "아티스트",
+        "음반", "앨범", "콘서트", "공연", "nct", "에스파", "라이즈",
+    ),
 }
 
 # 회사명과 동명이인인 스포츠팀·인물 기사를 기업 뉴스로 오인하지 않도록
@@ -162,6 +174,9 @@ ENTITY_CONFLICT_CONTEXTS: dict[str, tuple[str, ...]] = {
     ),
     "ENTERTAINMENT": (
         "배우", "가수", "방송", "드라마", "예능", "영화", "팬미팅", "콘서트",
+    ),
+    "GAMBLING": (
+        "토토", "먹튀", "도박", "베팅", "바카라", "카지노", "사설사이트", "슬롯머신",
     ),
 }
 
@@ -221,6 +236,7 @@ def infer_base_theme(sector: str = "", industry: str = "") -> str:
         (("의약", "바이오"), "바이오"),
         (("항공", "운송"), "항공"),
         (("가정용 기기", "생활가전", "생활용품"), "생활가전"),
+        (("오디오물", "음반", "연예", "엔터테인먼트", "공연"), "엔터/미디어"),
     )
     for keywords, theme in mappings:
         if any(keyword in text for keyword in keywords):
@@ -240,7 +256,8 @@ def _validate_news_entity(
 ) -> tuple[bool, str]:
     """종목명 일치 뒤 기업 문맥과 상충 문맥을 비교해 실제 기업 기사인지 판정합니다."""
     body = _normalize_text(f"{item.get('title', '')} {item.get('description', '')}")
-    if not any(_contains_alias(body, alias) for alias in _stock_aliases(stock_name)):
+    aliases = _stock_aliases(stock_name)
+    if not any(_contains_alias(body, alias) for alias in aliases):
         return False, "NO_ENTITY_MENTION"
 
     normalized_ticker = str(ticker or "").strip().zfill(6) if ticker else ""
@@ -248,9 +265,25 @@ def _validate_news_entity(
         return True, "MATCH_TICKER"
 
     corporate_hits = sum(keyword in body for keyword in CORPORATE_CONTEXT_KEYWORDS)
+    normalized_name = _normalize_text(stock_name).replace(" ", "")
+    configured_aliases = [
+        _normalize_text(alias).replace(" ", "")
+        for alias in STOCK_NEWS_ALIASES.get(stock_name, [])
+    ]
+    strong_alias_match = any(
+        alias != normalized_name and _contains_alias(body, alias)
+        for alias in configured_aliases
+    )
+    entity_context_hits = sum(
+        _contains_theme_keyword(body, keyword)
+        for keyword in STOCK_ENTITY_CONTEXT_KEYWORDS.get(stock_name, ())
+    )
+    base_theme = STOCK_BASE_THEMES.get(stock_name, "")
     strongest_conflict = ""
     strongest_hits = 0
     for context_name, keywords in ENTITY_CONFLICT_CONTEXTS.items():
+        if context_name == "ENTERTAINMENT" and base_theme == "엔터/미디어":
+            continue
         hits = sum(_contains_theme_keyword(body, keyword) for keyword in keywords)
         if context_name == "SPORTS":
             hits += len(re.findall(r"(?<!\d)\d+\s*[-:]\s*\d+(?!\d)", body))
@@ -264,7 +297,18 @@ def _validate_news_entity(
         return False, f"MISMATCH_{strongest_conflict}"
     if strongest_hits >= 2 and corporate_hits == 0:
         return False, f"MISMATCH_{strongest_conflict}"
-    return True, "MATCH_CORPORATE_CONTEXT" if corporate_hits else "MATCH_NAME"
+
+    compact_name = re.sub(r"\s+", "", normalized_name)
+    is_ambiguous_name = (
+        (compact_name.isascii() and len(compact_name) <= 3)
+        or (not compact_name.isascii() and len(compact_name) <= 3)
+    )
+    if is_ambiguous_name and not (strong_alias_match or corporate_hits or entity_context_hits):
+        return False, "MISMATCH_AMBIGUOUS_NAME"
+
+    if corporate_hits or entity_context_hits or strong_alias_match:
+        return True, "MATCH_CORPORATE_CONTEXT"
+    return True, "MATCH_NAME"
 
 
 def _classify_news_relevance(
@@ -469,7 +513,7 @@ def analyze_stock_news(
     """
     base_theme = STOCK_BASE_THEMES.get(stock_name) or infer_base_theme(sector, industry)
     default_result = {
-        "theme": "",
+        "theme": base_theme,
         "base_theme": base_theme,
         "recent_news_keywords": [],
         "issue_summary": "특이 이슈 없음 (기술적 흐름 기반)",

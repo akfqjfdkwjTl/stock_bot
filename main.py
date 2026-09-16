@@ -146,6 +146,19 @@ def _format_kst_now() -> str:
     return datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S KST")
 
 
+def _format_news_relevance(value: object) -> str:
+    """뉴스 분석 내부 상태를 사용자에게 이해하기 쉬운 문구로 바꿉니다."""
+    labels = {
+        "DIRECT": "종목 직접 관련",
+        "MATCH": "종목 관련",
+        "SECTOR": "업종 관련",
+        "WEAK": "관련성 낮음",
+        "MISMATCH": "비관련 기사 제외",
+        "NONE": "관련 뉴스 없음",
+    }
+    return labels.get(str(value or "NONE"), "관련 뉴스 없음")
+
+
 def _build_title(mode: str) -> str:
     """메시지 상단 제목을 만듭니다."""
     if mode == "real":
@@ -845,7 +858,7 @@ def build_symbol_debug_message(ticker_or_name: str) -> str:
         f"업종: {sector}",
         f"세부 업종: {industry_raw or '확인되지 않음'}",
         f"주요 테마: {news.get('theme') or '없음'}",
-        f"뉴스 관련성: {'관련 있음' if news.get('news_relevance') == 'MATCH' else '뚜렷한 관련 없음'}",
+        f"뉴스 관련성: {_format_news_relevance(news.get('news_relevance'))}",
         f"뉴스 점수: {news.get('news_score', 0)}점",
     ]
     if news.get("issue_summary"):

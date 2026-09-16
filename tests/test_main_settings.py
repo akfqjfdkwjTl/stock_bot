@@ -47,11 +47,16 @@ from main import (
     _grade_for_score,
     _normalize_listing_sector,
     _resolve_master_classification,
+    _format_news_relevance,
     build_symbol_debug_message,
 )
 
 
 class RecommendationSettingsTests(unittest.TestCase):
+    def test_news_relevance_is_shown_in_plain_korean(self) -> None:
+        self.assertEqual(_format_news_relevance("DIRECT"), "종목 직접 관련")
+        self.assertEqual(_format_news_relevance("MISMATCH"), "비관련 기사 제외")
+
     def test_watch_candidates_below_configured_minimum_are_not_selected(self) -> None:
         strategy_results = {
             "short": [],
@@ -291,7 +296,7 @@ class RecommendationSettingsTests(unittest.TestCase):
         self.assertIn("별도로 끝까지 분석했습니다", message)
         self.assertIn("기술적 기본조건: 미충족", message)
         self.assertIn("업종: 전선/전력인프라", message)
-        self.assertIn("뉴스 관련성: 관련 있음", message)
+        self.assertIn("뉴스 관련성: 종목 관련", message)
         self.assertIn("52주 최고가와의 거리: -5.50%", message)
         self.assertNotIn("universe", message)
         self.assertNotIn("technical filter", message)

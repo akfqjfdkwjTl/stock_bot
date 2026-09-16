@@ -72,6 +72,33 @@ class NewsEnrichmentTests(unittest.TestCase):
 
         self.assertEqual(relevance, "DIRECT")
 
+    def test_sm_gambling_spam_is_entity_mismatch(self) -> None:
+        article = {
+            "title": "게임 안팎의 설명이 일치하는지 확인할 에스엠 토토 먹튀",
+            "description": "전기차 배터리 추천과 무관한 사설 토토 사이트 광고입니다.",
+        }
+
+        matched, reason = _validate_news_entity("에스엠", "041510", article)
+        relevance = _classify_news_relevance(
+            "에스엠", "041510", article, "엔터/미디어"
+        )
+
+        self.assertFalse(matched)
+        self.assertEqual(reason, "MISMATCH_GAMBLING")
+        self.assertEqual(relevance, "MISMATCH")
+
+    def test_sm_entertainment_article_is_direct(self) -> None:
+        article = {
+            "title": "에스엠, 신인 아티스트 앨범 공개",
+            "description": "SM엔터테인먼트가 신규 음반과 콘서트 계획을 발표했습니다.",
+        }
+
+        relevance = _classify_news_relevance(
+            "에스엠", "041510", article, "엔터/미디어"
+        )
+
+        self.assertEqual(relevance, "DIRECT")
+
     def test_indirect_industry_article_is_sector_or_weak(self) -> None:
         article = {
             "title": "배터리 업종 투자 확대",
@@ -112,6 +139,30 @@ class NewsEnrichmentTests(unittest.TestCase):
         self.assertEqual(result["news_relevance"], "MISMATCH")
         self.assertEqual(result["news_score"], 0)
         self.assertEqual(result["theme_score"], 0)
+
+    def test_sm_gambling_news_does_not_create_battery_theme_or_score(self) -> None:
+        class FakeResponse:
+            text = """<rss><channel><item><title>게임 안팎의 설명이 일치하는지 확인할 에스엠 토토 먹튀</title><description>전기차 배터리 추천과 무관한 사설 토토 사이트 광고</description><pubDate>Sat, 12 Sep 2026 10:00:00 +0900</pubDate></item></channel></rss>"""
+
+            @staticmethod
+            def raise_for_status() -> None:
+                return None
+
+        with (
+            patch("news_analyzer.requests.get", return_value=FakeResponse()),
+            patch("news_analyzer.SETTINGS.news_lookback_days", 100),
+        ):
+            result = analyze_stock_news(
+                "에스엠",
+                ticker="041510",
+                sector="우량기업부",
+                industry="오디오물 출판 및 원판 녹음업",
+            )
+
+        self.assertEqual(result["theme"], "엔터/미디어")
+        self.assertEqual(result["news_relevance"], "MISMATCH")
+        self.assertEqual(result["news_score"], 0)
+        self.assertNotIn("2차전지", result["recent_news_keywords"])
 
     def test_news_score_does_not_change_technical_score(self) -> None:
         candidate = {
@@ -199,6 +250,7 @@ class NewsEnrichmentTests(unittest.TestCase):
     def test_krx_description_infers_conservative_base_theme(self) -> None:
         self.assertEqual(infer_base_theme("전동기, 발전기 및 전기 변환장치 제조업", "전력 케이블"), "전력")
         self.assertEqual(infer_base_theme("선박 및 보트 건조업", "선박 구성품"), "조선/기계")
+        self.assertEqual(infer_base_theme("우량기업부", "오디오물 출판 및 원판 녹음업"), "엔터/미디어")
 
 
 if __name__ == "__main__":
