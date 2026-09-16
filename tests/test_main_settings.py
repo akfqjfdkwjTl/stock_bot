@@ -226,9 +226,25 @@ class RecommendationSettingsTests(unittest.TestCase):
             UNCLASSIFIED_SECTOR,
         )
 
-    def test_symbol_debug_message_contains_filter_and_ranking_fields(self) -> None:
+    def test_kosdaq_department_uses_real_industry_for_entertainment(self) -> None:
+        sector, industry_raw, _themes = _resolve_master_classification(
+            "041510",
+            "에스엠",
+            "기타",
+            "우량기업부",
+            "오디오물 출판 및 원판 녹음업",
+        )
+
+        self.assertEqual(sector, "엔터/미디어")
+        self.assertEqual(industry_raw, "오디오물 출판 및 원판 녹음업")
+
+    def test_symbol_debug_message_uses_plain_korean_and_analyzes_outside_universe(self) -> None:
         symbol_info = {
-            "universe_included": True,
+            "found": True,
+            "universe_included": False,
+            "universe_description": "시가총액 중심 200개와 거래대금 상위 보완 종목을 합친 최대 300개",
+            "current_price": 50000,
+            "price_date": "2026-09-16",
             "listing_sector": "절연선 및 케이블 제조업",
             "listing_industry": "전력 케이블",
             "diagnostic": {
@@ -242,25 +258,43 @@ class RecommendationSettingsTests(unittest.TestCase):
                 "risk_penalty": 0,
                 "risk_filter": "FAIL",
                 "failure_reason": "갭 하락 필터 실패",
+                "metrics": {
+                    "change_pct": -1.2,
+                    "high52_distance_pct": -5.5,
+                    "rs_1m": 2.1,
+                    "rs_3m": 3.2,
+                    "rs_6m": 4.3,
+                    "vol_ratio": 1.4,
+                    "volume_contraction": True,
+                    "volume_contraction_ratio": 0.8,
+                    "staged_contraction": False,
+                },
                 "strategies": {},
             },
-            "news": {"theme": "전력", "news_relevance": "MATCH", "news_score": 5},
+            "news": {
+                "theme": "전력",
+                "news_relevance": "MATCH",
+                "news_score": 5,
+                "issue_summary": "전력 인프라 수요가 부각됐습니다.",
+            },
+            "candidates": [],
         }
         final_groups = {"all_candidates": [], "selected": []}
 
         with (
-            patch("main.run_screening", return_value=({}, [], [])),
             patch("main.debug_symbol", return_value=symbol_info),
             patch("main._build_final_recommendations", return_value=final_groups),
         ):
             message = build_symbol_debug_message("000500")
 
-        self.assertIn("universe 포함 여부: PASS", message)
-        self.assertIn("technical filter: FAIL", message)
-        self.assertIn("sector: 전선/전력인프라", message)
-        self.assertIn("news relevance: MATCH", message)
-        self.assertIn("final score: 0", message)
-        self.assertIn("최종 TOP5 ranking: 미포함", message)
+        self.assertIn("자동추천 분석 대상: 미포함", message)
+        self.assertIn("별도로 끝까지 분석했습니다", message)
+        self.assertIn("기술적 기본조건: 미충족", message)
+        self.assertIn("업종: 전선/전력인프라", message)
+        self.assertIn("뉴스 관련성: 관련 있음", message)
+        self.assertIn("52주 최고가와의 거리: -5.50%", message)
+        self.assertNotIn("universe", message)
+        self.assertNotIn("technical filter", message)
 
 
 if __name__ == "__main__":

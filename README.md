@@ -53,7 +53,7 @@ pip install -r requirements.txt
 TELEGRAM_BOT_TOKEN=your_telegram_bot_token
 TELEGRAM_CHAT_ID=your_telegram_chat_id
 SCREEN_MODE=real
-MAX_SYMBOLS=40
+MAX_SYMBOLS=300
 ```
 
 ## 텔레그램 봇 실행 방법
@@ -73,6 +73,8 @@ python telegram_bot.py
 - `/recommend short`
 - `/recommend swing`
 - `/recommend mid`
+- `/search SK하이닉스`
+- `/search 000660`
 
 `/recommend` 실행 시 텍스트 추천 결과만 전송합니다.
 
@@ -96,7 +98,9 @@ python main.py
 - `TELEGRAM_CHAT_ID`는 `main.py`에서 직접 전송할 때 사용합니다.
 - `telegram_bot.py`는 사용자가 봇 대화창에서 명령을 입력하면 그 채팅으로 응답합니다.
 - 이미지 생성 기능 코드는 남아 있지만 현재 기본 실행에서는 사용하지 않습니다.
-- 실데이터 조회가 느리면 `.env`에서 `MAX_SYMBOLS` 값을 더 낮춰서 속도를 줄일 수 있습니다.
+- 자동추천은 기본적으로 시가총액 중심 200개와 거래대금 상위 보완 종목을 합쳐 최대 300개를 분석합니다.
+- `/search`는 자동추천 분석 대상에 포함되지 않은 종목도 KOSPI·KOSDAQ 전체에서 찾아 개별 분석합니다.
+- 실데이터 조회가 느리면 `.env`에서 `MAX_SYMBOLS` 값을 더 낮춰서 자동추천 속도를 조절할 수 있습니다.
 - 같은 섹터가 반복 추천되지 않도록 `MAX_PER_SECTOR` 설정값으로 섹터당 최대 추천 개수를 제한합니다. 기본값은 `1`입니다.
 - 최종 추천은 최대 5개까지 보여주며, `A급 추천`을 먼저 출력하고 부족한 수는 `관찰 후보`로 보충합니다.
 - `A급 추천`이 없으면 `현재 기준 강한 추천 종목 없음`을 출력하고, 그 대신 `관찰 후보`를 최대 5개까지 보여줍니다.

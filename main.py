@@ -183,6 +183,7 @@ def _normalize_listing_sector(sector: str, industry: str) -> str:
         (("소프트웨어", "정보서비스", "인터넷", "통신"), "AI/IT"),
         (("가정용 기기", "생활가전", "생활용품"), "생활가전"),
         (("화장품",), "소비재/화장품"),
+        (("오디오물", "음반", "연예", "방송", "영상"), "엔터/미디어"),
         (("엔지니어링", "건축기술"), "산업재/엔지니어링"),
     )
     for keywords, group in mappings:
@@ -207,7 +208,11 @@ def _resolve_master_classification(
 
     if listing_sector or listing_industry:
         sector_group = _normalize_listing_sector(listing_sector, listing_industry)
-        industry_group = (listing_sector or listing_industry).strip()
+        market_departments = ("기업부", "소속부없음")
+        use_industry = listing_industry and any(
+            marker in listing_sector for marker in market_departments
+        )
+        industry_group = (listing_industry if use_industry else listing_sector or listing_industry).strip()
         return sector_group, industry_group, [sector_group]
 
     news_theme = (fallback_theme or "").strip()
@@ -739,36 +744,34 @@ def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dic
 
 
 def build_symbol_debug_message(ticker_or_name: str) -> str:
-    """특정 종목이 추천되거나 탈락한 과정을 동일 스크리닝 조건으로 설명합니다."""
+    """자동추천 범위와 무관하게 지정 종목을 쉬운 표현으로 분석합니다."""
     query = str(ticker_or_name or "").strip()
     if not query:
         return "사용법: /search 종목코드 또는 종목명\n예시: /search 000500"
 
-    strategy_results, _flat_results, errors = run_screening(mode="real")
     symbol_info = debug_symbol(query)
-    if not symbol_info.get("universe_included"):
+    if not symbol_info.get("found", True):
         return "\n".join(
             [
-                f"[종목 진단] {query}",
-                "universe 포함 여부: FAIL",
-                f"탈락 사유: {symbol_info.get('failure_reason', '종목을 찾지 못했습니다.')}",
+                f"[종목 분석] {query}",
+                "종목 확인: 찾지 못함",
+                symbol_info.get("failure_reason", "종목명 또는 종목코드를 확인해 주세요."),
             ]
         )
 
     diagnostic = symbol_info["diagnostic"]
     news = symbol_info["news"]
-    final_groups = _build_final_recommendations(strategy_results)
+    direct_strategy_results: dict[str, list[dict]] = {"short": [], "swing": [], "mid": []}
+    for item in symbol_info.get("candidates", []):
+        strategy_name = item.get("strategy")
+        if strategy_name in direct_strategy_results:
+            direct_strategy_results[strategy_name].append(item)
+    final_groups = _build_final_recommendations(direct_strategy_results)
     ticker = diagnostic["ticker"]
-    ranked = final_groups["all_candidates"]
-    ranked_position = next(
-        (index for index, item in enumerate(ranked, start=1) if item["ticker"] == ticker),
+    candidate = next(
+        (item for item in final_groups["all_candidates"] if item["ticker"] == ticker),
         None,
     )
-    selected_position = next(
-        (index for index, item in enumerate(final_groups["selected"], start=1) if item["ticker"] == ticker),
-        None,
-    )
-    candidate = next((item for item in ranked if item["ticker"] == ticker), None)
     sector, industry_raw, _themes = _resolve_master_classification(
         ticker,
         diagnostic["name"],
@@ -789,39 +792,96 @@ def build_symbol_debug_message(ticker_or_name: str) -> str:
             sector=sector,
         )
 
-    failure_reason = diagnostic.get("failure_reason", "")
-    if candidate and selected_position is None:
-        failure_reason = "기술 후보에는 포함됐지만 점수순 또는 섹터 분산 제한으로 최종 TOP5에서 제외됐습니다."
-    elif candidate and selected_position:
-        failure_reason = "최종 추천 목록에 포함됐습니다."
+    universe_included = bool(symbol_info.get("universe_included"))
+    universe_status = "포함" if universe_included else "미포함"
+    universe_note = (
+        "자동추천 실행 시 점수 경쟁 대상입니다."
+        if universe_included
+        else "자동추천 범위 밖이지만, 요청한 종목은 아래에서 별도로 끝까지 분석했습니다."
+    )
+    metrics = diagnostic.get("metrics", {})
+    candidate_score = candidate.get("recommendation_score", 0) if candidate else 0
+    grade = (
+        candidate.get("grade")
+        if candidate and candidate_score >= SETTINGS.watch_min_score
+        else "추천 기준 미달"
+    )
+    score_text = f"{candidate.get('recommendation_score', 0):.1f}점" if candidate else "산출 안 됨"
+    volume_contraction = "예" if metrics.get("volume_contraction") else "아니오"
+    staged_contraction = "예" if metrics.get("staged_contraction") else "아니오"
 
     lines = [
-        f"[종목 진단] {diagnostic['name']} / {ticker}",
-        "universe 포함 여부: PASS",
-        f"technical filter: {diagnostic['technical_filter']}",
-        f"trend: {diagnostic['trend']}",
-        f"liquidity: {diagnostic['liquidity']}",
-        f"setup score: {diagnostic['setup_score']}",
-        f"entry score: {diagnostic['entry_score']}",
-        f"risk penalty: {diagnostic['risk_penalty']} (감점 대신 필터 방식)",
-        f"risk filter: {diagnostic['risk_filter']}",
-        f"sector: {sector}",
-        f"industry_raw: {industry_raw}",
-        f"theme: {news.get('theme') or '없음'}",
-        f"news relevance: {news.get('news_relevance', 'NONE')}",
-        f"news score: {news.get('news_score', 0)}",
-        f"final score: {candidate.get('recommendation_score', 0) if candidate else 0}",
-        f"전체 후보 ranking: {ranked_position if ranked_position else '순위 없음'}",
-        f"최종 TOP5 ranking: {selected_position if selected_position else '미포함'}",
-        f"판정: {failure_reason or '정상'}",
+        f"[종목 분석] {diagnostic['name']} / {ticker}",
+        f"기준가격: {_format_currency(int(symbol_info.get('current_price', 0)))} ({symbol_info.get('price_date', '-')})",
         "",
-        "전략별 최초 탈락 사유",
+        "[자동추천 대상 여부]",
+        f"자동추천 분석 대상: {universe_status}",
+        f"선정 범위: {symbol_info.get('universe_description', '설정된 자동추천 대상 종목')}",
+        f"안내: {universe_note}",
+        "",
+        "[종합 판단]",
+        f"판정: {grade}",
+        f"종합점수: {score_text}",
+        f"적합 전략: {candidate.get('strategy_type', '-') if candidate else '-'}",
+        f"기술적 기본조건: {'통과' if diagnostic.get('technical_filter') == 'PASS' else '미충족'}",
+        f"추세 상태: {'양호' if diagnostic.get('trend') == 'PASS' else '확인 필요'}",
+        f"거래대금 조건: {'충족' if diagnostic.get('liquidity') == 'PASS' else '부족'}",
+        f"급락 위험 신호: {'이상 없음' if diagnostic.get('risk_filter') == 'PASS' else '주의'}",
+        "",
+        "[주가 흐름]",
+        f"당일 등락률: {metrics.get('change_pct', 0):+.2f}%",
+        f"52주 최고가와의 거리: {metrics.get('high52_distance_pct', 0):+.2f}%",
+        (
+            "시장 대비 주가 흐름: "
+            f"1개월 {metrics.get('rs_1m', 0):+.2f}%p / "
+            f"3개월 {metrics.get('rs_3m', 0):+.2f}%p / "
+            f"6개월 {metrics.get('rs_6m', 0):+.2f}%p"
+        ),
+        f"당일 거래량: 20일 평균의 {metrics.get('vol_ratio', 0):.2f}배",
+        f"거래량 감소 여부: {volume_contraction} ({metrics.get('volume_contraction_ratio', 0):.2f}배)",
+        f"가격 변동폭 단계적 축소: {staged_contraction}",
+        "",
+        "[업종·뉴스]",
+        f"업종: {sector}",
+        f"세부 업종: {industry_raw or '확인되지 않음'}",
+        f"주요 테마: {news.get('theme') or '없음'}",
+        f"뉴스 관련성: {'관련 있음' if news.get('news_relevance') == 'MATCH' else '뚜렷한 관련 없음'}",
+        f"뉴스 점수: {news.get('news_score', 0)}점",
     ]
-    for strategy_name, detail in diagnostic.get("strategies", {}).items():
-        reason = detail.get("failure_reason") or f"PASS ({detail.get('score', 0)}점)"
-        lines.append(f"- {strategy_name}: {reason}")
-    if errors:
-        lines.append(f"- 전체 스크리닝 데이터 오류: {len(errors)}건")
+    if news.get("issue_summary"):
+        lines.append(f"최근 이슈: {news['issue_summary']}")
+
+    lines.extend(["", "[전략별 판단]"])
+    strategy_labels = {
+        "short": ("단기", ("short_primary", "short_fallback")),
+        "swing": ("스윙", ("swing_primary",)),
+        "mid": ("중기", ("mid_primary", "mid_fallback")),
+    }
+    for strategy_key, (label, diagnostic_keys) in strategy_labels.items():
+        strategy_candidate = next(
+            (item for item in symbol_info.get("candidates", []) if item.get("strategy") == strategy_key),
+            None,
+        )
+        if strategy_candidate:
+            lines.append(f"- {label}: 통과 ({strategy_candidate.get('total_score', 0)}점)")
+            continue
+        details = [diagnostic.get("strategies", {}).get(key, {}) for key in diagnostic_keys]
+        reason = next(
+            (detail.get("failure_reason") for detail in details if detail.get("failure_reason")),
+            "조건 미충족",
+        )
+        lines.append(f"- {label}: 미충족 — {reason}")
+
+    lines.extend(["", "[최종 의견]"])
+    if candidate:
+        lines.append(candidate.get("summary_reason") or "기술 조건과 뉴스 흐름을 함께 확인했습니다.")
+        if candidate.get("change_warning"):
+            lines.append(candidate["change_warning"])
+    else:
+        lines.append(
+            diagnostic.get("failure_reason")
+            or "현재는 추천 전략의 기본조건을 충족하지 못해 관찰이 필요합니다."
+        )
     return "\n".join(lines)
 
 

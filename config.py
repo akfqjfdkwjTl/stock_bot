@@ -31,8 +31,9 @@ class Settings:
     max_per_sector: int = int(os.getenv("MAX_PER_SECTOR", "1"))
     final_recommendation_limit: int = int(os.getenv("FINAL_RECOMMENDATION_LIMIT", "5"))
 
-    # 실데이터 조회 범위를 제한해서 실행 시간을 줄입니다.
-    max_symbols: int = int(os.getenv("MAX_SYMBOLS", "100"))
+    # 자동추천은 대형주뿐 아니라 거래가 활발한 중형주까지 살펴봅니다.
+    # 개별 /search는 이 범위와 무관하게 KOSPI·KOSDAQ 전체에서 종목을 찾습니다.
+    max_symbols: int = int(os.getenv("MAX_SYMBOLS", "300"))
     history_calendar_days: int = int(os.getenv("HISTORY_CALENDAR_DAYS", "400"))
     news_lookback_days: int = int(os.getenv("NEWS_LOOKBACK_DAYS", "3"))
     news_max_items: int = int(os.getenv("NEWS_MAX_ITEMS", "8"))

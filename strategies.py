@@ -904,6 +904,13 @@ def diagnose_strategy_filters(ticker: str, name: str, df: pd.DataFrame) -> dict[
             "vol_ratio": _safe_number(metrics["vol_ratio"]),
             "value_ratio": _safe_number(metrics["value_ratio"]),
             "trading_value": int(metrics["trading_value"]),
+            "high52_distance_pct": _safe_number(metrics["high52_distance_pct"]),
+            "rs_1m": _safe_number(metrics["rs_1m"]),
+            "rs_3m": _safe_number(metrics["rs_3m"]),
+            "rs_6m": _safe_number(metrics["rs_6m"]),
+            "staged_contraction": bool(metrics["staged_contraction"]),
+            "volume_contraction": bool(metrics["volume_contraction"]),
+            "volume_contraction_ratio": _safe_number(metrics["volume_contraction_ratio"]),
         },
         "strategies": strategy_debug,
     }

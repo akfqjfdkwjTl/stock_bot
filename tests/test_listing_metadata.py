@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 import pandas as pd
 
@@ -56,6 +57,21 @@ class ListingMetadataTests(unittest.TestCase):
             self.assertEqual(second.loc[0, "Industry"], "반도체")
         finally:
             stock_screener._LISTING_METADATA_CACHE = original_cache
+
+    def test_universe_combines_market_cap_and_trading_value(self) -> None:
+        listing = pd.DataFrame(
+            [
+                {"Code": "000001", "Name": "시총1", "Market": "KOSPI", "Marcap": 600, "Amount": 1},
+                {"Code": "000002", "Name": "시총2", "Market": "KOSPI", "Marcap": 500, "Amount": 2},
+                {"Code": "000003", "Name": "거래활발", "Market": "KOSDAQ GLOBAL", "Marcap": 100, "Amount": 999},
+                {"Code": "000004", "Name": "기타", "Market": "KOSDAQ", "Marcap": 90, "Amount": 3},
+            ]
+        )
+
+        with patch.object(stock_screener.SETTINGS, "max_symbols", 3):
+            symbols = _select_real_symbols(listing)
+
+        self.assertEqual(symbols["Code"].tolist(), ["000001", "000002", "000003"])
 
 
 if __name__ == "__main__":

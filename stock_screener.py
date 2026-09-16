@@ -193,11 +193,12 @@ def _evaluate_dataframe(
     return results
 
 
-def _select_real_symbols(listing_df: pd.DataFrame) -> pd.DataFrame:
-    """KRX 상장 종목 중 실데이터 조회 대상을 줄입니다."""
+def _normalize_listing_symbols(listing_df: pd.DataFrame) -> pd.DataFrame:
+    """KRX 목록을 KOSPI·KOSDAQ 보통 종목 조회에 필요한 형태로 정리합니다."""
     data = listing_df.copy()
     if "Market" in data.columns:
-        data = data[data["Market"].isin(["KOSPI", "KOSDAQ"])]
+        market_names = data["Market"].fillna("").astype(str).str.strip()
+        data = data[market_names.str.startswith(("KOSPI", "KOSDAQ"))]
 
     code_column = None
     for candidate in ("Symbol", "Code"):
@@ -208,13 +209,13 @@ def _select_real_symbols(listing_df: pd.DataFrame) -> pd.DataFrame:
     if code_column is None or "Name" not in data.columns:
         raise ValueError("StockListing 결과에 Code/Symbol 또는 Name 컬럼이 없습니다.")
 
-    if "Marcap" in data.columns:
-        data["Marcap"] = pd.to_numeric(data["Marcap"], errors="coerce").fillna(0)
-        data = data.sort_values("Marcap", ascending=False)
-
-    data = data.drop_duplicates(subset=[code_column]).head(SETTINGS.max_symbols)
+    data = data.drop_duplicates(subset=[code_column])
     selected_columns = [code_column, "Name"]
-    selected_columns.extend(column for column in ("Market", "Sector", "Industry") if column in data.columns)
+    selected_columns.extend(
+        column
+        for column in ("Market", "Sector", "Industry", "Marcap", "Amount")
+        if column in data.columns
+    )
     data = data[selected_columns].copy()
     data = data.rename(columns={code_column: "Code"})
     if "Market" not in data.columns:
@@ -226,6 +227,33 @@ def _select_real_symbols(listing_df: pd.DataFrame) -> pd.DataFrame:
         data[column] = data[column].fillna("").astype(str).str.strip()
     data["Code"] = data["Code"].astype(str).str.zfill(6)
     return data.reset_index(drop=True)
+
+
+def _select_real_symbols(listing_df: pd.DataFrame) -> pd.DataFrame:
+    """시가총액 중심 후보에 거래대금 상위 종목을 보완해 자동추천 대상을 고릅니다."""
+    data = _normalize_listing_symbols(listing_df)
+    limit = max(1, SETTINGS.max_symbols)
+
+    if "Marcap" not in data.columns:
+        return data.head(limit).reset_index(drop=True)
+
+    data["Marcap"] = pd.to_numeric(data["Marcap"], errors="coerce").fillna(0)
+    market_cap_limit = max(1, (limit * 2) // 3)
+    market_cap_symbols = data.sort_values("Marcap", ascending=False).head(market_cap_limit)
+
+    if "Amount" not in data.columns or market_cap_limit >= limit:
+        selected = data.sort_values("Marcap", ascending=False).head(limit)
+        return selected.reset_index(drop=True)
+
+    data["Amount"] = pd.to_numeric(data["Amount"], errors="coerce").fillna(0)
+    active_symbols = data[~data["Code"].isin(market_cap_symbols["Code"])].sort_values(
+        ["Amount", "Marcap"], ascending=False
+    )
+    selected = pd.concat(
+        [market_cap_symbols, active_symbols.head(limit - market_cap_limit)],
+        ignore_index=True,
+    )
+    return selected.reset_index(drop=True)
 
 
 def _attach_listing_metadata(symbols: pd.DataFrame, description_df: pd.DataFrame) -> pd.DataFrame:
@@ -406,7 +434,7 @@ def _run_real_screening(
             name,
             normalized,
             strategy_filter=strategy_filter,
-            benchmark_df=benchmarks.get(market),
+            benchmark_df=benchmarks.get("KOSDAQ" if market.startswith("KOSDAQ") else "KOSPI"),
         )
         for item in ticker_results:
             if item.get("strategy") != "error":
@@ -510,26 +538,29 @@ def run_screening(
 
 
 def debug_symbol(ticker_or_name: str) -> dict[str, Any]:
-    """특정 종목의 universe·필터·뉴스 상태를 추천 점수 변경 없이 진단합니다."""
+    """자동추천 대상 여부와 무관하게 특정 종목을 끝까지 진단합니다."""
     import FinanceDataReader as fdr
 
     query = str(ticker_or_name or "").strip()
     listing_df = fdr.StockListing("KRX")
+    all_symbols = _normalize_listing_symbols(listing_df)
     target_symbols = _select_real_symbols(listing_df)
-    try:
-        target_symbols = _attach_listing_metadata(target_symbols, _load_listing_metadata(fdr))
-    except Exception:
-        pass
 
     code_query = query.zfill(6) if query.isdigit() else ""
-    mask = target_symbols["Code"].eq(code_query) if code_query else target_symbols["Name"].eq(query)
-    matched = target_symbols[mask]
+    mask = all_symbols["Code"].eq(code_query) if code_query else all_symbols["Name"].eq(query)
+    matched = all_symbols[mask]
     if matched.empty:
         return {
             "query": query,
+            "found": False,
             "universe_included": False,
-            "failure_reason": f"시가총액 상위 {SETTINGS.max_symbols}개 분석 universe에 포함되지 않았습니다.",
+            "failure_reason": "KOSPI·KOSDAQ 상장 종목에서 찾지 못했습니다. 종목명 또는 6자리 코드를 확인해 주세요.",
         }
+
+    try:
+        matched = _attach_listing_metadata(matched, _load_listing_metadata(fdr))
+    except Exception:
+        pass
 
     row = matched.iloc[0]
     ticker = str(row["Code"]).zfill(6)
@@ -541,7 +572,7 @@ def debug_symbol(ticker_or_name: str) -> dict[str, Any]:
     fetched = fdr.DataReader(ticker, start_date, end_date)
     normalized = _normalize_ohlcv(fetched)
     market = str(row.get("Market", "KOSPI") or "KOSPI").strip()
-    benchmark_symbol = "KQ11" if market == "KOSDAQ" else "KS11"
+    benchmark_symbol = "KQ11" if market.startswith("KOSDAQ") else "KS11"
     try:
         benchmark = fdr.DataReader(benchmark_symbol, start_date, end_date)
     except Exception:
@@ -554,15 +585,36 @@ def debug_symbol(ticker_or_name: str) -> dict[str, Any]:
         sector=listing_sector,
         industry=listing_industry,
     )
+    direct_candidates: list[dict[str, Any]] = []
+    for candidate in _evaluate_dataframe(
+        ticker,
+        name,
+        normalized,
+        benchmark_df=benchmark,
+    ):
+        if candidate.get("strategy") == "error":
+            continue
+        candidate["listing_sector"] = listing_sector
+        candidate["listing_industry"] = listing_industry
+        candidate["industry_raw"] = listing_sector or listing_industry
+        direct_candidates.append(enrich_candidate_with_news(candidate, news_info))
+
+    universe_included = ticker in set(target_symbols["Code"].astype(str).str.zfill(6))
     return {
         "query": query,
-        "universe_included": True,
+        "found": True,
+        "universe_included": universe_included,
+        "universe_description": (
+            f"시가총액 중심 {max(1, (SETTINGS.max_symbols * 2) // 3)}개와 "
+            f"거래대금 상위 보완 종목을 합친 최대 {SETTINGS.max_symbols}개"
+        ),
         "current_price": float(prepared.iloc[-1]["종가"]),
         "price_date": pd.Timestamp(prepared.index[-1]).date().isoformat(),
         "listing_sector": listing_sector,
         "listing_industry": listing_industry,
         "diagnostic": diagnostic,
         "news": news_info,
+        "candidates": direct_candidates,
     }
 
 

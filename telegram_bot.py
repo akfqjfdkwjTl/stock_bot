@@ -130,8 +130,9 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await send_text_chunks(
         update,
         context,
-        "주식 추천 봇입니다. /recommend 입력 시 종목을 보내드립니다. "
-        "/search 종목명 입력 시 추천 여부를 진단하고, /performance 또는 /perf 입력 시 최근 추천 성과를 조회합니다.",
+        "주식 추천 봇입니다. /recommend 입력 시 자동추천 종목을 보내드립니다. "
+        "/search 종목명 입력 시 자동추천 범위와 무관하게 해당 종목을 분석하고, "
+        "/performance 또는 /perf 입력 시 최근 추천 성과를 조회합니다.",
     )
 
 
@@ -192,7 +193,7 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await send_text_chunks(update, context, "현재 다른 종목 분석이 진행 중입니다. 완료 후 다시 요청해 주세요.")
         return
 
-    await send_text_chunks(update, context, f"{query} 추천 여부를 분석하고 있습니다. 잠시만 기다려 주세요.")
+    await send_text_chunks(update, context, f"{query} 종목을 분석하고 있습니다. 잠시만 기다려 주세요.")
     async with SCREENING_LOCK:
         try:
             result = await asyncio.to_thread(build_symbol_debug_message, query)
