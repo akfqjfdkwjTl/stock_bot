@@ -557,6 +557,8 @@ def debug_symbol(ticker_or_name: str) -> dict[str, Any]:
     return {
         "query": query,
         "universe_included": True,
+        "current_price": float(prepared.iloc[-1]["종가"]),
+        "price_date": pd.Timestamp(prepared.index[-1]).date().isoformat(),
         "listing_sector": listing_sector,
         "listing_industry": listing_industry,
         "diagnostic": diagnostic,

@@ -68,6 +68,22 @@ SCHEMA_STATEMENTS = (
         created_at TEXT NOT NULL
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS tracked_stocks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        track_date TEXT NOT NULL,
+        source TEXT NOT NULL,
+        ticker TEXT NOT NULL,
+        name TEXT NOT NULL,
+        reference_price REAL NOT NULL,
+        price_date TEXT,
+        score REAL,
+        strategy TEXT,
+        sector TEXT,
+        created_at TEXT NOT NULL,
+        UNIQUE(track_date, source, ticker)
+    )
+    """,
 )
 
 
@@ -97,6 +113,19 @@ def init_db(db_path: Path | str = DB_PATH) -> Path:
         _ensure_column(connection, "recommendations", "current_price", "REAL")
         _ensure_column(connection, "recommendations", "return_pct", "REAL")
         _ensure_column(connection, "recommendations", "performance_updated_at", "TEXT")
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO tracked_stocks (
+                track_date, source, ticker, name, reference_price, price_date,
+                score, strategy, sector, created_at
+            )
+            SELECT
+                run_date, 'recommendation', ticker, name, price_at_pick, price_date,
+                score, '', sector, created_at
+            FROM recommendations
+            WHERE price_at_pick IS NOT NULL AND price_at_pick > 0
+            """
+        )
         connection.commit()
     return path
 
@@ -224,9 +253,110 @@ def save_recommendations(
             """,
             rows,
         )
+        connection.executemany(
+            """
+            INSERT OR IGNORE INTO tracked_stocks (
+                track_date, source, ticker, name, reference_price, price_date,
+                score, strategy, sector, created_at
+            )
+            VALUES (?, 'recommendation', ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    run_date,
+                    item[2],
+                    item[3],
+                    item[11],
+                    item[12],
+                    item[5],
+                    "",
+                    item[8],
+                    created_at,
+                )
+                for item in rows
+                if item[11] is not None and item[11] > 0
+            ],
+        )
         connection.commit()
 
     return len(rows)
+
+
+def save_tracked_stock(
+    *,
+    source: str,
+    ticker: str,
+    name: str,
+    reference_price: float,
+    price_date: str = "",
+    score: float | None = None,
+    strategy: str = "",
+    sector: str = "",
+    track_date: str | None = None,
+    db_path: Path | str = DB_PATH,
+) -> bool:
+    """Freeze one daily recommendation/search price without overwriting it later."""
+    normalized_source = str(source or "").strip().lower()
+    if normalized_source not in {"recommendation", "search"}:
+        raise ValueError(f"지원하지 않는 추적 출처입니다: {source}")
+
+    price = float(reference_price)
+    if price <= 0:
+        return False
+
+    init_db(db_path)
+    now = _kst_now()
+    created_at = now.strftime("%Y-%m-%d %H:%M:%S KST")
+    resolved_track_date = track_date or now.strftime("%Y-%m-%d")
+    clean_ticker = "".join(ch for ch in str(ticker) if ch.isdigit()).zfill(6)
+
+    with closing(_connect(db_path)) as connection:
+        cursor = connection.execute(
+            """
+            INSERT OR IGNORE INTO tracked_stocks (
+                track_date, source, ticker, name, reference_price, price_date,
+                score, strategy, sector, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                resolved_track_date,
+                normalized_source,
+                clean_ticker,
+                str(name),
+                price,
+                str(price_date or ""),
+                float(score) if score is not None else None,
+                str(strategy or ""),
+                str(sector or ""),
+                created_at,
+            ),
+        )
+        connection.commit()
+        return cursor.rowcount > 0
+
+
+def load_tracked_stocks(
+    *,
+    limit: int = 300,
+    db_path: Path | str = DB_PATH,
+) -> list[dict]:
+    """Load frozen recommendation/search observations, newest first."""
+    init_db(db_path)
+    with closing(_connect(db_path)) as connection:
+        connection.row_factory = sqlite3.Row
+        rows = connection.execute(
+            """
+            SELECT
+                id, track_date, source, ticker, name, reference_price,
+                price_date, score, strategy, sector, created_at
+            FROM tracked_stocks
+            ORDER BY track_date DESC, created_at DESC, id DESC
+            LIMIT ?
+            """,
+            (max(1, int(limit)),),
+        ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def update_recommendation_performance(

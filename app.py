@@ -15,7 +15,7 @@ import requests
 from fastapi import FastAPI, Query
 from fastapi.responses import HTMLResponse
 
-from db import init_db, update_recommendation_performance
+from db import init_db, load_tracked_stocks, update_recommendation_performance
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -996,6 +996,18 @@ def render_dashboard(selected_date: str | None = None) -> str:
       font-size: 13px;
       line-height: 1.65;
     }}
+    .page-nav {{
+      display: inline-flex;
+      margin-top: 14px;
+      padding: 8px 12px;
+      border: 1px solid rgba(39,184,238,.28);
+      border-radius: 999px;
+      color: #9fdfff;
+      background: rgba(39,184,238,.08);
+      font-size: 12px;
+      font-weight: 900;
+      text-decoration: none;
+    }}
     .date-panel {{
       display: grid;
       grid-template-columns: minmax(0, 1fr) minmax(220px, 300px);
@@ -1667,6 +1679,7 @@ def render_dashboard(selected_date: str | None = None) -> str:
       </div>
       {date_controls}
       <p class="hero-note">SQLite 추천 데이터와 시장 지표를 한 화면에서 확인하는 서버용 FastAPI 대시보드입니다.</p>
+      <a class="page-nav" href="/tracking">추천·검색 종목 추적 →</a>
     </header>
 
     <main class="content">
@@ -1741,6 +1754,123 @@ def render_dashboard(selected_date: str | None = None) -> str:
 </html>"""
 
 
+def render_tracking_page() -> str:
+    """Render frozen recommendation/search prices against the latest close."""
+    try:
+        tracked = load_tracked_stocks(limit=100)
+        error = ""
+    except Exception as exc:
+        tracked = []
+        error = f"추적 데이터를 불러오지 못했습니다: {exc}"
+
+    get_stock_price_data.cache_clear()
+    rows: list[dict] = []
+    for item in tracked:
+        price_data = get_stock_price_data(item["ticker"])
+        current_price = price_data.get("current_price_value")
+        return_pct = calculate_return_pct(item["reference_price"], current_price)
+        rows.append({**item, "current_price": current_price, "return_pct": return_pct})
+
+    valid_returns = [row["return_pct"] for row in rows if row["return_pct"] is not None]
+    average_return = sum(valid_returns) / len(valid_returns) if valid_returns else None
+    up_count = sum(1 for value in valid_returns if value > 0)
+    down_count = sum(1 for value in valid_returns if value < 0)
+
+    table_rows = []
+    for row in rows:
+        source_label = "추천" if row["source"] == "recommendation" else "검색"
+        source_class = "recommendation" if row["source"] == "recommendation" else "search"
+        return_class = "up" if (row["return_pct"] or 0) > 0 else "down" if (row["return_pct"] or 0) < 0 else "neutral"
+        score_text = f"{row['score']:.1f}점" if row.get("score") is not None else "-"
+        detail = " / ".join(value for value in (row.get("strategy", ""), score_text) if value and value != "-") or "-"
+        table_rows.append(
+            f"""
+            <tr>
+              <td><span class="source {source_class}">{source_label}</span></td>
+              <td>{esc(row['track_date'])}</td>
+              <td><strong>{esc(row['name'])}</strong><small>{esc(row['ticker'])} · {esc(row.get('sector') or '미분류')}</small></td>
+              <td>{esc(row.get('price_date') or row['track_date'])}</td>
+              <td>{_format_pick_price(row['reference_price'])}</td>
+              <td>{_format_pick_price(row['current_price'])}</td>
+              <td class="{return_class}"><strong>{_format_return(row['return_pct'])}</strong></td>
+              <td>{esc(detail)}</td>
+            </tr>
+            """
+        )
+
+    rows_html = "".join(table_rows) or '<tr><td class="empty" colspan="8">아직 저장된 추천·검색 종목이 없습니다.</td></tr>'
+    notice = f'<div class="notice">{esc(error)}</div>' if error else ""
+    avg_class = "up" if (average_return or 0) > 0 else "down" if (average_return or 0) < 0 else "neutral"
+
+    return f"""<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>추천·검색 종목 추적</title>
+  <style>
+    :root {{ --bg:#070a0e; --panel:#101622; --line:rgba(255,255,255,.1); --text:#f4f7fb; --muted:#8e9aad; --blue:#27b8ee; --green:#49e09a; --red:#ff7575; }}
+    * {{ box-sizing:border-box; }}
+    body {{ margin:0; min-height:100vh; color:var(--text); background:radial-gradient(circle at 92% 0%,rgba(39,184,238,.12),transparent 28%),var(--bg); font-family:"Segoe UI","Noto Sans KR",Arial,sans-serif; }}
+    .shell {{ width:min(1180px,calc(100% - 28px)); margin:auto; padding:28px 0 50px; }}
+    header {{ padding:24px; border:1px solid var(--line); border-radius:14px; background:rgba(13,18,25,.92); }}
+    .eyebrow {{ margin:0 0 6px; color:var(--green); font-size:11px; font-weight:900; letter-spacing:.14em; }}
+    h1 {{ margin:0; font-size:clamp(28px,5vw,46px); }}
+    header p {{ margin:10px 0 0; color:var(--muted); line-height:1.55; }}
+    nav {{ margin-top:15px; }}
+    nav a {{ color:#9fdfff; font-size:13px; font-weight:900; text-decoration:none; }}
+    .stats {{ display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin:18px 0; }}
+    .stat {{ padding:17px; border:1px solid var(--line); border-radius:12px; background:var(--panel); }}
+    .stat span {{ display:block; color:var(--muted); font-size:12px; font-weight:800; }}
+    .stat strong {{ display:block; margin-top:7px; font-size:25px; }}
+    .table-wrap {{ overflow-x:auto; border:1px solid var(--line); border-radius:14px; background:var(--panel); }}
+    table {{ width:100%; min-width:980px; border-collapse:collapse; }}
+    th,td {{ padding:14px 13px; border-bottom:1px solid var(--line); text-align:left; white-space:nowrap; font-size:13px; }}
+    th {{ color:var(--muted); background:#0d1219; font-size:11px; letter-spacing:.04em; }}
+    tr:last-child td {{ border-bottom:0; }}
+    td small {{ display:block; margin-top:5px; color:var(--muted); font-size:11px; }}
+    .source {{ display:inline-flex; padding:5px 8px; border-radius:999px; font-size:11px; font-weight:900; }}
+    .source.recommendation {{ color:#08140e; background:var(--green); }}
+    .source.search {{ color:#07131a; background:var(--blue); }}
+    .up {{ color:var(--green); }} .down {{ color:var(--red); }} .neutral {{ color:var(--muted); }}
+    .notice {{ margin:16px 0; padding:12px; border:1px solid rgba(255,117,117,.3); color:#ffd1d1; border-radius:10px; }}
+    .empty {{ padding:34px; color:var(--muted); text-align:center; }}
+    .caption {{ margin:12px 2px 0; color:var(--muted); font-size:11px; line-height:1.5; }}
+    @media(max-width:720px) {{ .shell {{ width:min(100% - 18px,1180px); padding-top:10px; }} header {{ padding:18px; }} .stats {{ grid-template-columns:repeat(2,minmax(0,1fr)); }} }}
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <p class="eyebrow">PRICE TRACKING</p>
+      <h1>추천·검색 종목 추적</h1>
+      <p>추천 또는 검색한 날의 기준가격을 고정하고, 최신 종가와 비교한 등락률을 보여줍니다.</p>
+      <nav><a href="/">← 오늘의 관심종목으로</a></nav>
+    </header>
+    <section class="stats">
+      <div class="stat"><span>추적 건수</span><strong>{len(rows)}</strong></div>
+      <div class="stat"><span>상승</span><strong class="up">{up_count}</strong></div>
+      <div class="stat"><span>하락</span><strong class="down">{down_count}</strong></div>
+      <div class="stat"><span>평균 등락률</span><strong class="{avg_class}">{_format_return(average_return)}</strong></div>
+    </section>
+    {notice}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>구분</th><th>기록일</th><th>종목</th><th>기준가격일</th><th>기준가격</th><th>최신 종가</th><th>등락률</th><th>전략 / 점수</th></tr></thead>
+        <tbody>{rows_html}</tbody>
+      </table>
+    </div>
+    <p class="caption">같은 날 같은 종목은 추천·검색 구분별로 최초 1회만 저장됩니다. 최신 종가는 무료 시세 데이터 기준이며 장중 실시간 가격이 아닙니다.</p>
+  </div>
+</body>
+</html>"""
+
+
 @app.get("/", response_class=HTMLResponse)
 def dashboard(date: str | None = Query(default=None)) -> HTMLResponse:
     return HTMLResponse(render_dashboard(date))
+
+
+@app.get("/tracking", response_class=HTMLResponse)
+def tracking() -> HTMLResponse:
+    return HTMLResponse(render_tracking_page())
