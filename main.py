@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 
 from config import SETTINGS
 from dashboard_capture import capture_dashboard, refresh_market_json, save_dashboard_data
-from db import save_recommendations
+from db import save_recommendations, save_tracked_stock
 from stock_screener import debug_symbol, run_screening, save_results_to_csv
 from telegram_sender import send_telegram_message, send_telegram_photo
 
@@ -742,7 +742,7 @@ def build_symbol_debug_message(ticker_or_name: str) -> str:
     """특정 종목이 추천되거나 탈락한 과정을 동일 스크리닝 조건으로 설명합니다."""
     query = str(ticker_or_name or "").strip()
     if not query:
-        return "사용법: /debug 종목코드 또는 종목명\n예시: /debug 000500"
+        return "사용법: /search 종목코드 또는 종목명\n예시: /search 000500"
 
     strategy_results, _flat_results, errors = run_screening(mode="real")
     symbol_info = debug_symbol(query)
@@ -775,6 +775,16 @@ def build_symbol_debug_message(ticker_or_name: str) -> str:
         news.get("theme", ""),
         symbol_info.get("listing_sector", ""),
         symbol_info.get("listing_industry", ""),
+    )
+    save_tracked_stock(
+        source="search",
+        ticker=ticker,
+        name=diagnostic["name"],
+        reference_price=symbol_info["current_price"],
+        price_date=symbol_info.get("price_date", ""),
+        score=candidate.get("recommendation_score", 0) if candidate else 0,
+        strategy=candidate.get("strategy_type", "") if candidate else "",
+        sector=sector,
     )
 
     failure_reason = diagnostic.get("failure_reason", "")
