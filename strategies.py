@@ -333,11 +333,11 @@ def _score_vcp(metrics: dict[str, Any]) -> int:
 def _score_relative_strength(metrics: dict[str, Any]) -> int:
     """기간별 초과수익이 지속될수록 가점하고 단일 기간 급등은 제한합니다."""
     score = 0
-    if metrics.get("rs_1m", 0) > 0:
+    if metrics.get("rs_1m", 0) >= 2:
         score += 2
-    if metrics.get("rs_3m", 0) > 0:
+    if metrics.get("rs_3m", 0) >= 3:
         score += 3
-    if metrics.get("rs_6m", 0) > 0:
+    if metrics.get("rs_6m", 0) >= 5:
         score += 5
     return score
 
