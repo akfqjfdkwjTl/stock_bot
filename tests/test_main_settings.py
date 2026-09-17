@@ -71,6 +71,8 @@ class RecommendationSettingsTests(unittest.TestCase):
                     "total_score": 54,
                     "theme": "기타",
                     "news_score": 0,
+                    "stop_loss": 900,
+                    "target_price": 1200,
                 },
                 {
                     "ticker": "005930",
@@ -90,6 +92,8 @@ class RecommendationSettingsTests(unittest.TestCase):
 
         self.assertEqual([item["ticker"] for item in result["selected"]], ["105560"])
         self.assertEqual(result["selected"][0]["recommendation_score"], 40.5)
+        self.assertEqual(result["selected"][0]["stop_loss"], 900)
+        self.assertEqual(result["selected"][0]["target_price"], 1200)
 
     def test_grade_thresholds_come_from_settings(self) -> None:
         with (

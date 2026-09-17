@@ -80,8 +80,29 @@ SCHEMA_STATEMENTS = (
         score REAL,
         strategy TEXT,
         sector TEXT,
+        stop_price REAL,
+        target_price REAL,
         created_at TEXT NOT NULL,
         UNIQUE(track_date, source, ticker)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS tracked_performance (
+        tracked_stock_id INTEGER PRIMARY KEY,
+        latest_price REAL,
+        latest_price_date TEXT,
+        latest_return_pct REAL,
+        d5_return_pct REAL,
+        d10_return_pct REAL,
+        d20_return_pct REAL,
+        mfe_pct REAL,
+        mae_pct REAL,
+        target_hit_date TEXT,
+        stop_hit_date TEXT,
+        first_exit TEXT,
+        observed_sessions INTEGER NOT NULL DEFAULT 0,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(tracked_stock_id) REFERENCES tracked_stocks(id)
     )
     """,
 )
@@ -113,15 +134,17 @@ def init_db(db_path: Path | str = DB_PATH) -> Path:
         _ensure_column(connection, "recommendations", "current_price", "REAL")
         _ensure_column(connection, "recommendations", "return_pct", "REAL")
         _ensure_column(connection, "recommendations", "performance_updated_at", "TEXT")
+        _ensure_column(connection, "tracked_stocks", "stop_price", "REAL")
+        _ensure_column(connection, "tracked_stocks", "target_price", "REAL")
         connection.execute(
             """
             INSERT OR IGNORE INTO tracked_stocks (
                 track_date, source, ticker, name, reference_price, price_date,
-                score, strategy, sector, created_at
+                score, strategy, sector, stop_price, target_price, created_at
             )
             SELECT
                 run_date, 'recommendation', ticker, name, price_at_pick, price_date,
-                score, '', sector, created_at
+                score, '', sector, NULL, NULL, created_at
             FROM recommendations
             WHERE price_at_pick IS NOT NULL AND price_at_pick > 0
             """
@@ -155,6 +178,15 @@ def _price_at_pick(item: dict) -> float | None:
         return None
     try:
         return float(price)
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_float(value: object) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
     except (TypeError, ValueError):
         return None
 
@@ -253,28 +285,31 @@ def save_recommendations(
             """,
             rows,
         )
+        tracked_items = [*grade_a_items, *watch_items]
         connection.executemany(
             """
             INSERT OR IGNORE INTO tracked_stocks (
                 track_date, source, ticker, name, reference_price, price_date,
-                score, strategy, sector, created_at
+                score, strategy, sector, stop_price, target_price, created_at
             )
-            VALUES (?, 'recommendation', ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, 'recommendation', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 (
                     run_date,
-                    item[2],
-                    item[3],
-                    item[11],
-                    item[12],
-                    item[5],
-                    "",
-                    item[8],
+                    item["ticker"],
+                    item["name"],
+                    _price_at_pick(item),
+                    item.get("price_date", ""),
+                    float(item.get("recommendation_score", item.get("observation_score", item.get("final_score", 0)))),
+                    item.get("strategy_type", ""),
+                    item.get("sector_group", item.get("theme", "")),
+                    _optional_float(item.get("stop_loss")),
+                    _optional_float(item.get("target_price")),
                     created_at,
                 )
-                for item in rows
-                if item[11] is not None and item[11] > 0
+                for item in tracked_items
+                if _price_at_pick(item) is not None and _price_at_pick(item) > 0
             ],
         )
         connection.commit()
@@ -292,6 +327,8 @@ def save_tracked_stock(
     score: float | None = None,
     strategy: str = "",
     sector: str = "",
+    stop_price: float | None = None,
+    target_price: float | None = None,
     track_date: str | None = None,
     db_path: Path | str = DB_PATH,
 ) -> bool:
@@ -315,9 +352,9 @@ def save_tracked_stock(
             """
             INSERT OR IGNORE INTO tracked_stocks (
                 track_date, source, ticker, name, reference_price, price_date,
-                score, strategy, sector, created_at
+                score, strategy, sector, stop_price, target_price, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 resolved_track_date,
@@ -329,6 +366,8 @@ def save_tracked_stock(
                 float(score) if score is not None else None,
                 str(strategy or ""),
                 str(sector or ""),
+                _optional_float(stop_price),
+                _optional_float(target_price),
                 created_at,
             ),
         )
@@ -348,15 +387,74 @@ def load_tracked_stocks(
         rows = connection.execute(
             """
             SELECT
-                id, track_date, source, ticker, name, reference_price,
-                price_date, score, strategy, sector, created_at
+                tracked_stocks.id, track_date, source, ticker, name, reference_price,
+                price_date, score, strategy, sector, stop_price, target_price, created_at,
+                latest_price, latest_price_date, latest_return_pct,
+                d5_return_pct, d10_return_pct, d20_return_pct,
+                mfe_pct, mae_pct, target_hit_date, stop_hit_date,
+                first_exit, observed_sessions, updated_at AS performance_updated_at
             FROM tracked_stocks
-            ORDER BY track_date DESC, created_at DESC, id DESC
+            LEFT JOIN tracked_performance
+              ON tracked_performance.tracked_stock_id = tracked_stocks.id
+            ORDER BY track_date DESC, created_at DESC, tracked_stocks.id DESC
             LIMIT ?
             """,
             (max(1, int(limit)),),
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+def upsert_tracked_performance(
+    tracked_stock_id: int,
+    performance: dict,
+    *,
+    db_path: Path | str = DB_PATH,
+) -> None:
+    """Persist the latest forward-performance summary for one tracked stock."""
+    init_db(db_path)
+    updated_at = _kst_now().strftime("%Y-%m-%d %H:%M:%S KST")
+    with closing(_connect(db_path)) as connection:
+        connection.execute(
+            """
+            INSERT INTO tracked_performance (
+                tracked_stock_id, latest_price, latest_price_date, latest_return_pct,
+                d5_return_pct, d10_return_pct, d20_return_pct, mfe_pct, mae_pct,
+                target_hit_date, stop_hit_date, first_exit, observed_sessions, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(tracked_stock_id) DO UPDATE SET
+                latest_price = excluded.latest_price,
+                latest_price_date = excluded.latest_price_date,
+                latest_return_pct = excluded.latest_return_pct,
+                d5_return_pct = excluded.d5_return_pct,
+                d10_return_pct = excluded.d10_return_pct,
+                d20_return_pct = excluded.d20_return_pct,
+                mfe_pct = excluded.mfe_pct,
+                mae_pct = excluded.mae_pct,
+                target_hit_date = excluded.target_hit_date,
+                stop_hit_date = excluded.stop_hit_date,
+                first_exit = excluded.first_exit,
+                observed_sessions = excluded.observed_sessions,
+                updated_at = excluded.updated_at
+            """,
+            (
+                int(tracked_stock_id),
+                _optional_float(performance.get("latest_price")),
+                str(performance.get("latest_price_date") or ""),
+                _optional_float(performance.get("latest_return_pct")),
+                _optional_float(performance.get("d5_return_pct")),
+                _optional_float(performance.get("d10_return_pct")),
+                _optional_float(performance.get("d20_return_pct")),
+                _optional_float(performance.get("mfe_pct")),
+                _optional_float(performance.get("mae_pct")),
+                performance.get("target_hit_date"),
+                performance.get("stop_hit_date"),
+                str(performance.get("first_exit") or "OPEN"),
+                int(performance.get("observed_sessions") or 0),
+                updated_at,
+            ),
+        )
+        connection.commit()
 
 
 def update_recommendation_performance(
