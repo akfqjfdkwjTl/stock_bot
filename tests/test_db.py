@@ -7,7 +7,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from db import load_tracked_stocks, save_recommendations, save_tracked_stock
+from db import (
+    load_tracked_stocks,
+    save_recommendations,
+    save_tracked_stock,
+    upsert_tracked_performance,
+)
 
 
 class RecommendationPersistenceTests(unittest.TestCase):
@@ -26,6 +31,9 @@ class RecommendationPersistenceTests(unittest.TestCase):
             "price_date": "2026-09-12",
             "news_items": [],
             "score_detail": {"총점": score},
+            "strategy_type": "mid",
+            "stop_loss": 90000,
+            "target_price": 120000,
         }
 
     def test_same_day_market_results_are_replaced(self) -> None:
@@ -54,6 +62,8 @@ class RecommendationPersistenceTests(unittest.TestCase):
         self.assertEqual(tracked[0]["source"], "recommendation")
         self.assertEqual(tracked[0]["reference_price"], 100000.0)
         self.assertEqual(tracked[0]["score"], 70.0)
+        self.assertEqual(tracked[0]["stop_price"], 90000.0)
+        self.assertEqual(tracked[0]["target_price"], 120000.0)
 
     def test_recommendation_and_search_are_separate_daily_records(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -94,6 +104,43 @@ class RecommendationPersistenceTests(unittest.TestCase):
         self.assertTrue(first)
         self.assertFalse(second)
         self.assertEqual(tracked[0]["reference_price"], 350000.0)
+
+    def test_performance_summary_is_upserted_and_loaded(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "stock_bot.db"
+            save_tracked_stock(
+                source="search",
+                ticker="000660",
+                name="SK하이닉스",
+                reference_price=350000,
+                price_date="2026-09-16",
+                stop_price=330000,
+                target_price=400000,
+                db_path=db_path,
+            )
+            tracked_id = load_tracked_stocks(db_path=db_path)[0]["id"]
+            upsert_tracked_performance(
+                tracked_id,
+                {
+                    "latest_price": 360000,
+                    "latest_price_date": "2026-09-17",
+                    "latest_return_pct": 2.8571,
+                    "d5_return_pct": 4.0,
+                    "mfe_pct": 6.0,
+                    "mae_pct": -2.0,
+                    "target_hit_date": None,
+                    "stop_hit_date": None,
+                    "first_exit": "OPEN",
+                    "observed_sessions": 5,
+                },
+                db_path=db_path,
+            )
+            tracked = load_tracked_stocks(db_path=db_path)[0]
+
+        self.assertEqual(tracked["latest_price"], 360000.0)
+        self.assertEqual(tracked["d5_return_pct"], 4.0)
+        self.assertEqual(tracked["mfe_pct"], 6.0)
+        self.assertEqual(tracked["first_exit"], "OPEN")
 
 
 if __name__ == "__main__":

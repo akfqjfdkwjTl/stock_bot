@@ -15,7 +15,13 @@ import requests
 from fastapi import FastAPI, Query
 from fastapi.responses import HTMLResponse
 
-from db import init_db, load_tracked_stocks, update_recommendation_performance
+from db import (
+    init_db,
+    load_tracked_stocks,
+    update_recommendation_performance,
+    upsert_tracked_performance,
+)
+from performance_tracker import calculate_tracking_performance
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -189,6 +195,48 @@ def get_stock_price_data(ticker: str) -> dict:
             continue
 
     return _empty_price_data()
+
+
+@lru_cache(maxsize=512)
+def get_stock_history(ticker: str, start_date: str) -> list[dict]:
+    """Fetch daily OHLC history for one Korean stock, trying both exchanges."""
+    import yfinance as yf
+
+    clean_ticker = "".join(ch for ch in ticker if ch.isdigit()).zfill(6)
+    if not clean_ticker or not start_date:
+        return []
+
+    end_date = (datetime.now(KST) + timedelta(days=1)).strftime("%Y-%m-%d")
+    for suffix in (".KS", ".KQ"):
+        try:
+            history = yf.Ticker(f"{clean_ticker}{suffix}").history(
+                start=start_date,
+                end=end_date,
+                interval="1d",
+                auto_adjust=False,
+            )
+            if history.empty or "Close" not in history:
+                continue
+            observations = []
+            for index, row in history.iterrows():
+                close = row.get("Close")
+                if close is None or close != close:
+                    continue
+                high = row.get("High", close)
+                low = row.get("Low", close)
+                observations.append(
+                    {
+                        "date": index.strftime("%Y-%m-%d"),
+                        "high": float(high) if high == high else float(close),
+                        "low": float(low) if low == low else float(close),
+                        "close": float(close),
+                    }
+                )
+            if observations:
+                return observations
+        except Exception:
+            continue
+    return []
 
 
 def get_fear_greed() -> dict:
@@ -1755,7 +1803,7 @@ def render_dashboard(selected_date: str | None = None) -> str:
 
 
 def render_tracking_page() -> str:
-    """Render frozen recommendation/search prices against the latest close."""
+    """Render frozen picks with forward-session performance measurements."""
     try:
         tracked = load_tracked_stocks(limit=100)
         error = ""
@@ -1763,15 +1811,47 @@ def render_tracking_page() -> str:
         tracked = []
         error = f"추적 데이터를 불러오지 못했습니다: {exc}"
 
-    get_stock_price_data.cache_clear()
+    get_stock_history.cache_clear()
+    earliest_dates: dict[str, str] = {}
+    for item in tracked:
+        reference_date = item.get("price_date") or item["track_date"]
+        current = earliest_dates.get(item["ticker"])
+        if not current or reference_date < current:
+            earliest_dates[item["ticker"]] = reference_date
+
+    histories = {
+        ticker: get_stock_history(ticker, start_date)
+        for ticker, start_date in earliest_dates.items()
+    }
     rows: list[dict] = []
     for item in tracked:
-        price_data = get_stock_price_data(item["ticker"])
-        current_price = price_data.get("current_price_value")
-        return_pct = calculate_return_pct(item["reference_price"], current_price)
-        rows.append({**item, "current_price": current_price, "return_pct": return_pct})
+        reference_date = item.get("price_date") or item["track_date"]
+        observations = histories.get(item["ticker"], [])
+        if observations:
+            performance = calculate_tracking_performance(
+                reference_price=item["reference_price"],
+                reference_date=reference_date,
+                observations=observations,
+                target_price=item.get("target_price"),
+                stop_price=item.get("stop_price"),
+            )
+            try:
+                upsert_tracked_performance(item["id"], performance, db_path=DB_PATH)
+            except Exception:
+                pass
+        else:
+            performance = {
+                key: item.get(key)
+                for key in (
+                    "latest_price", "latest_price_date", "latest_return_pct",
+                    "d5_return_pct", "d10_return_pct", "d20_return_pct",
+                    "mfe_pct", "mae_pct", "target_hit_date", "stop_hit_date",
+                    "first_exit", "observed_sessions",
+                )
+            }
+        rows.append({**item, **performance})
 
-    valid_returns = [row["return_pct"] for row in rows if row["return_pct"] is not None]
+    valid_returns = [row["latest_return_pct"] for row in rows if row["latest_return_pct"] is not None]
     average_return = sum(valid_returns) / len(valid_returns) if valid_returns else None
     up_count = sum(1 for value in valid_returns if value > 0)
     down_count = sum(1 for value in valid_returns if value < 0)
@@ -1780,9 +1860,42 @@ def render_tracking_page() -> str:
     for row in rows:
         source_label = "추천" if row["source"] == "recommendation" else "검색"
         source_class = "recommendation" if row["source"] == "recommendation" else "search"
-        return_class = "up" if (row["return_pct"] or 0) > 0 else "down" if (row["return_pct"] or 0) < 0 else "neutral"
+        return_class = "up" if (row["latest_return_pct"] or 0) > 0 else "down" if (row["latest_return_pct"] or 0) < 0 else "neutral"
         score_text = f"{row['score']:.1f}점" if row.get("score") is not None else "-"
         detail = " / ".join(value for value in (row.get("strategy", ""), score_text) if value and value != "-") or "-"
+        period_returns = "<br>".join(
+            (
+                f"D+5 {_format_return(row.get('d5_return_pct'))}",
+                f"D+10 {_format_return(row.get('d10_return_pct'))}",
+                f"D+20 {_format_return(row.get('d20_return_pct'))}",
+            )
+        )
+        excursion = "<br>".join(
+            (
+                f"MFE {_format_return(row.get('mfe_pct'))}",
+                f"MAE {_format_return(row.get('mae_pct'))}",
+            )
+        )
+        exit_labels = {
+            "TARGET_FIRST": "목표가 선도달",
+            "STOP_FIRST": "손절가 선도달",
+            "SAME_DAY": "동일일 동시 도달",
+            "OPEN": "아직 미도달",
+            "NOT_SET": "기준 없음",
+        }
+        exit_code = row.get("first_exit") or ("NOT_SET" if not row.get("target_price") and not row.get("stop_price") else "OPEN")
+        exit_detail = exit_labels.get(exit_code, "확인 중")
+        hit_dates = []
+        if row.get("target_hit_date"):
+            hit_dates.append(f"목표 {row['target_hit_date']}")
+        if row.get("stop_hit_date"):
+            hit_dates.append(f"손절 {row['stop_hit_date']}")
+        if hit_dates:
+            exit_detail += f"<small>{' / '.join(hit_dates)}</small>"
+        level_detail = (
+            f"<small>목표 {_format_pick_price(row.get('target_price'))} / "
+            f"손절 {_format_pick_price(row.get('stop_price'))}</small>"
+        )
         table_rows.append(
             f"""
             <tr>
@@ -1791,14 +1904,17 @@ def render_tracking_page() -> str:
               <td><strong>{esc(row['name'])}</strong><small>{esc(row['ticker'])} · {esc(row.get('sector') or '미분류')}</small></td>
               <td>{esc(row.get('price_date') or row['track_date'])}</td>
               <td>{_format_pick_price(row['reference_price'])}</td>
-              <td>{_format_pick_price(row['current_price'])}</td>
-              <td class="{return_class}"><strong>{_format_return(row['return_pct'])}</strong></td>
+              <td>{_format_pick_price(row['latest_price'])}<small>{esc(row.get('latest_price_date') or '')}</small></td>
+              <td class="{return_class}"><strong>{_format_return(row['latest_return_pct'])}</strong></td>
+              <td>{period_returns}</td>
+              <td>{excursion}</td>
+              <td><strong>{exit_detail}</strong>{level_detail}</td>
               <td>{esc(detail)}</td>
             </tr>
             """
         )
 
-    rows_html = "".join(table_rows) or '<tr><td class="empty" colspan="8">아직 저장된 추천·검색 종목이 없습니다.</td></tr>'
+    rows_html = "".join(table_rows) or '<tr><td class="empty" colspan="11">아직 저장된 추천·검색 종목이 없습니다.</td></tr>'
     notice = f'<div class="notice">{esc(error)}</div>' if error else ""
     avg_class = "up" if (average_return or 0) > 0 else "down" if (average_return or 0) < 0 else "neutral"
 
@@ -1824,8 +1940,8 @@ def render_tracking_page() -> str:
     .stat span {{ display:block; color:var(--muted); font-size:12px; font-weight:800; }}
     .stat strong {{ display:block; margin-top:7px; font-size:25px; }}
     .table-wrap {{ overflow-x:auto; border:1px solid var(--line); border-radius:14px; background:var(--panel); }}
-    table {{ width:100%; min-width:980px; border-collapse:collapse; }}
-    th,td {{ padding:14px 13px; border-bottom:1px solid var(--line); text-align:left; white-space:nowrap; font-size:13px; }}
+    table {{ width:100%; min-width:1480px; border-collapse:collapse; }}
+    th,td {{ padding:14px 13px; border-bottom:1px solid var(--line); text-align:left; white-space:nowrap; font-size:13px; line-height:1.55; }}
     th {{ color:var(--muted); background:#0d1219; font-size:11px; letter-spacing:.04em; }}
     tr:last-child td {{ border-bottom:0; }}
     td small {{ display:block; margin-top:5px; color:var(--muted); font-size:11px; }}
@@ -1844,7 +1960,7 @@ def render_tracking_page() -> str:
     <header>
       <p class="eyebrow">PRICE TRACKING</p>
       <h1>추천·검색 종목 추적</h1>
-      <p>추천 또는 검색한 날의 기준가격을 고정하고, 최신 종가와 비교한 등락률을 보여줍니다.</p>
+      <p>기준가격을 고정하고 이후 거래일의 수익률, 최대 상승·하락폭, 목표가·손절가 도달 결과를 보여줍니다.</p>
       <nav><a href="/">← 오늘의 관심종목으로</a></nav>
     </header>
     <section class="stats">
@@ -1856,11 +1972,11 @@ def render_tracking_page() -> str:
     {notice}
     <div class="table-wrap">
       <table>
-        <thead><tr><th>구분</th><th>기록일</th><th>종목</th><th>기준가격일</th><th>기준가격</th><th>최신 종가</th><th>등락률</th><th>전략 / 점수</th></tr></thead>
+        <thead><tr><th>구분</th><th>기록일</th><th>종목</th><th>기준가격일</th><th>기준가격</th><th>최신 종가</th><th>현재 수익률</th><th>기간 수익률</th><th>경로</th><th>목표 / 손절</th><th>전략 / 점수</th></tr></thead>
         <tbody>{rows_html}</tbody>
       </table>
     </div>
-    <p class="caption">같은 날 같은 종목은 추천·검색 구분별로 최초 1회만 저장됩니다. 최신 종가는 무료 시세 데이터 기준이며 장중 실시간 가격이 아닙니다.</p>
+    <p class="caption">D+5·10·20은 기준일 다음 거래일부터 계산합니다. MFE/MAE는 이후 일봉의 고가·저가 기준이며, 같은 날 목표가와 손절가를 모두 터치한 경우 장중 순서를 추정하지 않습니다. 최신 종가는 무료 일봉 데이터 기준입니다.</p>
   </div>
 </body>
 </html>"""

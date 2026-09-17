@@ -347,6 +347,12 @@ def _copy_score_fields(entry: dict, item: dict) -> None:
         entry[field] = item.get(field, entry.get(field, 0))
 
 
+def _copy_strategy_trade_levels(entry: dict, item: dict, strategy: str) -> None:
+    """Keep each strategy's exit levels separate while candidates are merged."""
+    entry[f"{strategy}_stop_loss"] = item.get("stop_loss")
+    entry[f"{strategy}_target_price"] = item.get("target_price")
+
+
 def _score_detail_from_entry(entry: dict) -> dict:
     technical_score = (
         entry.get("score_breakout", 0)
@@ -584,6 +590,7 @@ def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dic
             entry["listing_sector"] = item.get("listing_sector", entry.get("listing_sector", ""))
             entry["listing_industry"] = item.get("listing_industry", entry.get("listing_industry", ""))
             _copy_score_fields(entry, item)
+            _copy_strategy_trade_levels(entry, item, "short")
 
     for item in strategy_results.get("swing", []):
         entry = merged_by_ticker.setdefault(
@@ -637,6 +644,7 @@ def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dic
             entry["listing_sector"] = item.get("listing_sector", entry.get("listing_sector", ""))
             entry["listing_industry"] = item.get("listing_industry", entry.get("listing_industry", ""))
             _copy_score_fields(entry, item)
+            _copy_strategy_trade_levels(entry, item, "swing")
 
     for item in strategy_results.get("mid", []):
         entry = merged_by_ticker.setdefault(
@@ -683,6 +691,7 @@ def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dic
             entry["listing_sector"] = item.get("listing_sector", entry.get("listing_sector", ""))
             entry["listing_industry"] = item.get("listing_industry", entry.get("listing_industry", ""))
             _copy_score_fields(entry, item)
+            _copy_strategy_trade_levels(entry, item, "mid")
 
     all_candidates: list[dict] = []
     for entry in merged_by_ticker.values():
@@ -706,6 +715,11 @@ def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dic
         enriched["recommendation_score"] = round(observation_score, 1)
         enriched["grade"] = _grade_for_score(enriched["recommendation_score"])
         enriched["strategy_type"] = strategy_type
+        level_strategy = strategy_type
+        if strategy_type == "혼합":
+            level_strategy = "swing" if entry["swing_score"] >= entry["short_score"] else "short"
+        enriched["stop_loss"] = entry.get(f"{level_strategy}_stop_loss")
+        enriched["target_price"] = entry.get(f"{level_strategy}_target_price")
         fallback_theme = enriched.get("theme", "기타")
         sector_group, industry_group, representative_themes = _resolve_master_classification(
             enriched["ticker"],
@@ -803,6 +817,8 @@ def build_symbol_debug_message(ticker_or_name: str) -> str:
             score=candidate.get("recommendation_score", 0) if candidate else 0,
             strategy=candidate.get("strategy_type", "") if candidate else "",
             sector=sector,
+            stop_price=candidate.get("stop_loss") if candidate else None,
+            target_price=candidate.get("target_price") if candidate else None,
         )
 
     universe_included = bool(symbol_info.get("universe_included"))
