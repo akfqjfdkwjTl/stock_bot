@@ -17,6 +17,11 @@ class Settings:
 
     telegram_bot_token: str = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     telegram_chat_id: str = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+    auto_recommend_enabled: bool = (
+        os.getenv("AUTO_RECOMMEND_ENABLED", "true").strip().lower() == "true"
+    )
+    auto_recommend_hour: int = int(os.getenv("AUTO_RECOMMEND_HOUR", "8"))
+    auto_recommend_minute: int = int(os.getenv("AUTO_RECOMMEND_MINUTE", "50"))
     results_csv_path: str = "results.csv"
     backtest_results_csv_path: str = "backtest_results.csv"
     backtest_summary_json_path: str = "backtest_summary.json"

@@ -5,8 +5,10 @@ from __future__ import annotations
 import sys
 import types
 import unittest
+from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
+from zoneinfo import ZoneInfo
 
 
 telegram_module = types.ModuleType("telegram")
@@ -25,6 +27,48 @@ import telegram_bot
 
 
 class TelegramRecommendationTests(unittest.IsolatedAsyncioTestCase):
+    def test_next_0850_kst_run_before_schedule(self) -> None:
+        now = datetime(2026, 9, 18, 8, 49, tzinfo=ZoneInfo("Asia/Seoul"))
+
+        with (
+            patch.object(telegram_bot.SETTINGS, "auto_recommend_hour", 8),
+            patch.object(telegram_bot.SETTINGS, "auto_recommend_minute", 50),
+        ):
+            seconds = telegram_bot.seconds_until_daily_recommendation(now)
+
+        self.assertEqual(seconds, 60)
+
+    def test_next_0850_kst_run_after_schedule_is_tomorrow(self) -> None:
+        now = datetime(2026, 9, 18, 8, 51, tzinfo=ZoneInfo("Asia/Seoul"))
+
+        with (
+            patch.object(telegram_bot.SETTINGS, "auto_recommend_hour", 8),
+            patch.object(telegram_bot.SETTINGS, "auto_recommend_minute", 50),
+        ):
+            seconds = telegram_bot.seconds_until_daily_recommendation(now)
+
+        self.assertEqual(seconds, 23 * 60 * 60 + 59 * 60)
+
+    async def test_scheduled_recommendation_sends_result_and_dashboard_link(self) -> None:
+        bot = SimpleNamespace(send_message=AsyncMock())
+        application = SimpleNamespace(bot=bot)
+
+        with (
+            patch.object(telegram_bot.SETTINGS, "telegram_chat_id", "1234"),
+            patch.object(
+                telegram_bot.asyncio,
+                "to_thread",
+                new_callable=AsyncMock,
+                return_value="자동 추천 결과",
+            ) as to_thread,
+        ):
+            await telegram_bot.send_scheduled_recommendation(application)
+
+        to_thread.assert_awaited_once_with(telegram_bot.build_recommendation_text)
+        self.assertEqual(bot.send_message.await_count, 2)
+        self.assertEqual(bot.send_message.await_args_list[0].kwargs["text"], "자동 추천 결과")
+        self.assertIn(telegram_bot.DASHBOARD_PUBLIC_URL, bot.send_message.await_args_list[1].kwargs["text"])
+
     async def test_screening_runs_in_worker_thread(self) -> None:
         update = SimpleNamespace(effective_chat=SimpleNamespace(id=1234))
         context = SimpleNamespace(args=["short"], bot=SimpleNamespace())

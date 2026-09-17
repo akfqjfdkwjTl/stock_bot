@@ -6,7 +6,10 @@ import atexit
 import asyncio
 import logging
 import os
+from contextlib import suppress
+from datetime import datetime, time, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
@@ -36,6 +39,8 @@ DASHBOARD_PUBLIC_URL = "http://168.110.116.149:8000"
 DASHBOARD_INTERNAL_URL = "http://127.0.0.1:8000"
 DASHBOARD_SCREENSHOT_PATH = Path(__file__).with_name("dashboard.png")
 SCREENING_LOCK = asyncio.Lock()
+KST = ZoneInfo("Asia/Seoul")
+DAILY_RECOMMENDATION_TASK_KEY = "daily_recommendation_task"
 
 
 def _process_exists(pid: int) -> bool:
@@ -126,6 +131,87 @@ async def send_text_chunks(
         logging.info("Sent Telegram chunk: chat_id=%s, chunk=%s/%s", chat_id, index, len(chunks))
 
 
+async def send_bot_text_chunks(bot: object, chat_id: str, text: str, *, limit: int = 3500) -> None:
+    """Send text without a Telegram Update, for scheduled recommendations."""
+    chunks = split_message(text.strip() or "추천 결과가 비어 있습니다.", limit=limit)
+    for index, chunk in enumerate(chunks, start=1):
+        await bot.send_message(chat_id=chat_id, text=chunk)
+        logging.info(
+            "Sent scheduled Telegram chunk: chat_id=%s, chunk=%s/%s",
+            chat_id,
+            index,
+            len(chunks),
+        )
+
+
+def seconds_until_daily_recommendation(now: datetime | None = None) -> float:
+    """Return seconds until the next configured 08:50 KST run."""
+    current = now.astimezone(KST) if now is not None else datetime.now(KST)
+    scheduled_time = time(
+        hour=SETTINGS.auto_recommend_hour,
+        minute=SETTINGS.auto_recommend_minute,
+        tzinfo=KST,
+    )
+    next_run = datetime.combine(current.date(), scheduled_time)
+    if next_run <= current:
+        next_run += timedelta(days=1)
+    return (next_run - current).total_seconds()
+
+
+async def send_scheduled_recommendation(application: object) -> None:
+    """Run the same analysis as /recommend and send its result plus dashboard link."""
+    chat_id = SETTINGS.telegram_chat_id
+    if not chat_id:
+        logging.error("Scheduled recommendation skipped: TELEGRAM_CHAT_ID is empty.")
+        return
+
+    async with SCREENING_LOCK:
+        result = await asyncio.to_thread(build_recommendation_text)
+
+    await send_bot_text_chunks(application.bot, chat_id, result)
+    await application.bot.send_message(
+        chat_id=chat_id,
+        text=f"추천 결과 확인: {DASHBOARD_PUBLIC_URL}",
+    )
+
+
+async def daily_recommendation_loop(application: object) -> None:
+    """Keep the daily KST schedule alive inside the PM2-managed bot process."""
+    while True:
+        delay = seconds_until_daily_recommendation()
+        next_run = datetime.now(KST) + timedelta(seconds=delay)
+        logging.info("Next automatic /recommend: %s", next_run.strftime("%Y-%m-%d %H:%M:%S KST"))
+        await asyncio.sleep(delay)
+        try:
+            await send_scheduled_recommendation(application)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logging.exception("Automatic /recommend failed")
+
+
+async def start_daily_recommendation(application: object) -> None:
+    if not SETTINGS.auto_recommend_enabled:
+        logging.info("Automatic /recommend is disabled.")
+        return
+    if not SETTINGS.telegram_chat_id:
+        logging.error("Automatic /recommend is enabled but TELEGRAM_CHAT_ID is empty.")
+        return
+    application.bot_data[DAILY_RECOMMENDATION_TASK_KEY] = asyncio.create_task(
+        daily_recommendation_loop(application),
+        name=DAILY_RECOMMENDATION_TASK_KEY,
+    )
+
+
+async def stop_daily_recommendation(application: object) -> None:
+    task = application.bot_data.pop(DAILY_RECOMMENDATION_TASK_KEY, None)
+    if task is None:
+        return
+    task.cancel()
+    with suppress(asyncio.CancelledError):
+        await task
+
+
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await send_text_chunks(
         update,
@@ -214,7 +300,13 @@ def main() -> None:
 
     _acquire_instance_lock()
 
-    application = ApplicationBuilder().token(SETTINGS.telegram_bot_token).build()
+    application = (
+        ApplicationBuilder()
+        .token(SETTINGS.telegram_bot_token)
+        .post_init(start_daily_recommendation)
+        .post_shutdown(stop_daily_recommendation)
+        .build()
+    )
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("recommend", recommend_command))
     application.add_handler(CommandHandler(["performance", "perf"], performance_command))
