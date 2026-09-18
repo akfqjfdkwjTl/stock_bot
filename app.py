@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import html
 import json
 import sqlite3
@@ -26,6 +27,9 @@ from performance_tracker import calculate_tracking_performance
 
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR / "data" / "stock_bot.db"
+BACKTEST_DIR = BASE_DIR / "data" / "backtests"
+BACKTEST_SUMMARY_PATH = BACKTEST_DIR / "technical_backtest_latest.json"
+BACKTEST_ROWS_PATH = BACKTEST_DIR / "technical_backtest_latest.csv"
 KST = ZoneInfo("Asia/Seoul")
 
 app = FastAPI(title="Stock Dashboard")
@@ -1728,6 +1732,7 @@ def render_dashboard(selected_date: str | None = None) -> str:
       {date_controls}
       <p class="hero-note">SQLite 추천 데이터와 시장 지표를 한 화면에서 확인하는 서버용 FastAPI 대시보드입니다.</p>
       <a class="page-nav" href="/tracking">추천·검색 종목 추적 →</a>
+      <a class="page-nav" href="/backtest">1개월 기술적 백테스트 →</a>
     </header>
 
     <main class="content">
@@ -1961,7 +1966,7 @@ def render_tracking_page() -> str:
       <p class="eyebrow">PRICE TRACKING</p>
       <h1>추천·검색 종목 추적</h1>
       <p>기준가격을 고정하고 이후 거래일의 수익률, 최대 상승·하락폭, 목표가·손절가 도달 결과를 보여줍니다.</p>
-      <nav><a href="/">← 오늘의 관심종목으로</a></nav>
+      <nav><a href="/">← 오늘의 관심종목으로</a> · <a href="/backtest">1개월 기술적 백테스트</a></nav>
     </header>
     <section class="stats">
       <div class="stat"><span>추적 건수</span><strong>{len(rows)}</strong></div>
@@ -1982,6 +1987,201 @@ def render_tracking_page() -> str:
 </html>"""
 
 
+def load_backtest_report(
+    summary_path: Path = BACKTEST_SUMMARY_PATH,
+    rows_path: Path = BACKTEST_ROWS_PATH,
+) -> tuple[dict, list[dict], str | None]:
+    """Load the latest persisted walk-forward report for the web dashboard."""
+    if not summary_path.exists():
+        return {}, [], "아직 생성된 백테스트 결과가 없습니다. 배치 실행이 완료되면 자동으로 표시됩니다."
+
+    try:
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        rows: list[dict] = []
+        if rows_path.exists():
+            with rows_path.open("r", encoding="utf-8-sig", newline="") as handle:
+                rows = list(csv.DictReader(handle))
+        def row_rank(row: dict) -> int:
+            try:
+                return int(float(row.get("rank") or 9999))
+            except (TypeError, ValueError):
+                return 9999
+
+        rows.sort(key=row_rank)
+        rows.sort(key=lambda row: row.get("signal_date", ""), reverse=True)
+        return summary, rows, None
+    except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        return {}, [], f"백테스트 결과를 읽지 못했습니다: {exc}"
+
+
+def _backtest_number(value: object) -> float | None:
+    if value in (None, "", "None", "nan"):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _backtest_metric_card(label: str, metric: dict) -> str:
+    sample_count = int(metric.get("sample_count") or 0)
+    win_rate = _backtest_number(metric.get("win_rate_pct"))
+    average = _backtest_number(metric.get("average_pct"))
+    median_value = _backtest_number(metric.get("median_pct"))
+    direction = "up" if (average or 0) > 0 else "down" if (average or 0) < 0 else "neutral"
+    return f"""
+      <article class="metric-card">
+        <span>{esc(label)}</span>
+        <strong class="{direction}">{_format_return(average)}</strong>
+        <div><b>승률 {_format_win_rate(win_rate)}</b><small>표본 {sample_count}건 · 중앙값 {_format_return(median_value)}</small></div>
+      </article>
+    """
+
+
+def _render_backtest_group(title: str, groups: dict) -> str:
+    if not groups:
+        return ""
+    rows = []
+    for name, metrics in groups.items():
+        d5 = metrics.get("d5", {})
+        d10 = metrics.get("d10", {})
+        d20 = metrics.get("d20", {})
+        rows.append(
+            f"""
+            <tr>
+              <td><strong>{esc(name)}</strong><small>신호 {int(metrics.get('signal_count') or 0)}건</small></td>
+              <td>{_format_return(_backtest_number(d5.get('average_pct')))}<small>승률 {_format_win_rate(_backtest_number(d5.get('win_rate_pct')))} / {int(d5.get('sample_count') or 0)}건</small></td>
+              <td>{_format_return(_backtest_number(d10.get('average_pct')))}<small>승률 {_format_win_rate(_backtest_number(d10.get('win_rate_pct')))} / {int(d10.get('sample_count') or 0)}건</small></td>
+              <td>{_format_return(_backtest_number(d20.get('average_pct')))}<small>승률 {_format_win_rate(_backtest_number(d20.get('win_rate_pct')))} / {int(d20.get('sample_count') or 0)}건</small></td>
+            </tr>
+            """
+        )
+    return f"""
+      <section class="panel compact-table">
+        <div class="section-head"><div><p>BREAKDOWN</p><h2>{esc(title)}</h2></div></div>
+        <div class="table-wrap"><table><thead><tr><th>구분</th><th>D+5</th><th>D+10</th><th>D+20</th></tr></thead><tbody>{''.join(rows)}</tbody></table></div>
+      </section>
+    """
+
+
+def render_backtest_page() -> str:
+    """Render the latest technical-only one-month walk-forward backtest."""
+    summary, rows, error = load_backtest_report()
+    config = summary.get("config", {})
+    period = (
+        f"{config.get('start', 'N/A')} ~ {config.get('end', 'N/A')}"
+        if summary
+        else "N/A"
+    )
+
+    metric_cards = "".join(
+        (
+            _backtest_metric_card("D+5 평균 수익률", summary.get("d5", {})),
+            _backtest_metric_card("D+10 평균 수익률", summary.get("d10", {})),
+            _backtest_metric_card("D+20 평균 수익률", summary.get("d20", {})),
+            _backtest_metric_card("D+20 시장초과", summary.get("d20_excess", {})),
+        )
+    )
+
+    exit_labels = {
+        "TARGET_FIRST": "목표가 선도달",
+        "STOP_FIRST": "손절가 선도달",
+        "SAME_DAY": "동일일 동시 도달",
+        "OPEN": "기간 내 미도달",
+        "NOT_SET": "기준 없음",
+    }
+    detail_rows = []
+    for row in rows:
+        d20 = _backtest_number(row.get("d20_return_pct"))
+        d20_class = "up" if (d20 or 0) > 0 else "down" if (d20 or 0) < 0 else "neutral"
+        detail_rows.append(
+            f"""
+            <tr>
+              <td>{esc(row.get('signal_date', ''))}<small>진입 {esc(row.get('entry_date', ''))}</small></td>
+              <td><strong>{esc(row.get('name', ''))}</strong><small>{esc(row.get('ticker', ''))} · {esc(row.get('sector', '미분류'))}</small></td>
+              <td>{esc(row.get('grade', '-'))}<small>{esc(row.get('strategy', '-'))} · {esc(row.get('score', '-'))}점</small></td>
+              <td>{_format_pick_price(_backtest_number(row.get('entry_price')))}</td>
+              <td>{_format_return(_backtest_number(row.get('d5_return_pct')))}</td>
+              <td>{_format_return(_backtest_number(row.get('d10_return_pct')))}</td>
+              <td class="{d20_class}"><strong>{_format_return(d20)}</strong></td>
+              <td>{_format_return(_backtest_number(row.get('d20_excess_return_pct')))}</td>
+              <td>{_format_return(_backtest_number(row.get('mfe_pct')))}<small>MAE {_format_return(_backtest_number(row.get('mae_pct')))}</small></td>
+              <td>{esc(exit_labels.get(row.get('first_exit', ''), row.get('first_exit', '-') or '-'))}</td>
+            </tr>
+            """
+        )
+    details_html = "".join(detail_rows) or '<tr><td class="empty" colspan="10">표시할 추천 기록이 없습니다.</td></tr>'
+    notice = f'<div class="notice">{esc(error)}</div>' if error else ""
+
+    return f"""<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>1개월 기술적 백테스트</title>
+  <style>
+    :root {{ --bg:#070a0e; --panel:#101622; --panel2:#0d1219; --line:rgba(255,255,255,.1); --text:#f4f7fb; --muted:#8e9aad; --blue:#27b8ee; --green:#49e09a; --red:#ff7575; }}
+    * {{ box-sizing:border-box; }}
+    body {{ margin:0; min-height:100vh; color:var(--text); background:radial-gradient(circle at 92% 0%,rgba(73,224,154,.12),transparent 30%),var(--bg); font-family:"Segoe UI","Noto Sans KR",Arial,sans-serif; }}
+    .shell {{ width:min(1240px,calc(100% - 28px)); margin:auto; padding:28px 0 52px; }}
+    header,.panel {{ border:1px solid var(--line); border-radius:14px; background:rgba(13,18,25,.94); }}
+    header {{ padding:26px; }}
+    .eyebrow,.section-head p {{ margin:0 0 6px; color:var(--green); font-size:11px; font-weight:900; letter-spacing:.14em; }}
+    h1 {{ margin:0; font-size:clamp(30px,5vw,48px); }} h2 {{ margin:0; font-size:22px; }}
+    header>p:not(.eyebrow) {{ margin:11px 0 0; color:var(--muted); line-height:1.6; }}
+    nav {{ display:flex; flex-wrap:wrap; gap:14px; margin-top:16px; }} nav a {{ color:#9fdfff; font-size:13px; font-weight:900; text-decoration:none; }}
+    .run-meta {{ display:flex; flex-wrap:wrap; gap:10px 18px; margin-top:15px; color:#c7d0de; font-size:13px; }}
+    .metrics {{ display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin:18px 0; }}
+    .metric-card {{ padding:18px; border:1px solid var(--line); border-radius:12px; background:var(--panel); }}
+    .metric-card>span {{ display:block; color:var(--muted); font-size:12px; font-weight:800; }}
+    .metric-card>strong {{ display:block; margin:8px 0 13px; font-size:28px; }}
+    .metric-card b,.metric-card small {{ display:block; font-size:12px; }} .metric-card small {{ margin-top:5px; color:var(--muted); }}
+    .panel {{ margin-top:16px; padding:20px; }} .section-head {{ margin-bottom:14px; }}
+    .facts {{ display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; }}
+    .fact {{ padding:14px; border-radius:10px; background:var(--panel2); }} .fact span {{ display:block; color:var(--muted); font-size:11px; }} .fact strong {{ display:block; margin-top:6px; font-size:18px; }}
+    .table-wrap {{ overflow-x:auto; border:1px solid var(--line); border-radius:12px; }}
+    table {{ width:100%; min-width:1120px; border-collapse:collapse; }} .compact-table table {{ min-width:660px; }}
+    th,td {{ padding:13px 12px; border-bottom:1px solid var(--line); text-align:left; white-space:nowrap; font-size:13px; line-height:1.5; }}
+    th {{ color:var(--muted); background:var(--panel2); font-size:11px; }} tr:last-child td {{ border-bottom:0; }} td small {{ display:block; margin-top:4px; color:var(--muted); font-size:11px; }}
+    .up {{ color:var(--green); }} .down {{ color:var(--red); }} .neutral {{ color:var(--muted); }}
+    .notice {{ margin:18px 0; padding:14px; border:1px solid rgba(255,117,117,.3); border-radius:10px; color:#ffd1d1; }} .empty {{ padding:32px; color:var(--muted); text-align:center; }}
+    .caption {{ margin:12px 2px 0; color:var(--muted); font-size:11px; line-height:1.6; }}
+    @media(max-width:800px) {{ .shell {{ width:min(100% - 18px,1240px); padding-top:10px; }} header,.panel {{ padding:17px; }} .metrics,.facts {{ grid-template-columns:repeat(2,minmax(0,1fr)); }} .metric-card>strong {{ font-size:23px; }} }}
+  </style>
+</head>
+<body><div class="shell">
+  <header>
+    <p class="eyebrow">TECHNICAL WALK-FORWARD</p>
+    <h1>1개월 기술적 백테스트</h1>
+    <p>각 과거 거래일 종가까지만 사용해 현재 추천 로직을 다시 실행하고, 다음 거래일 시가 진입 기준 성과를 측정합니다. 뉴스·테마 점수는 0점으로 고정합니다.</p>
+    <div class="run-meta"><span>신호 기간 <strong>{esc(period)}</strong></span><span>생성시각 <strong>{esc(summary.get('generated_at', 'N/A'))}</strong></span><span>유니버스 <strong>최대 {esc(config.get('max_symbols', 'N/A'))}종목</strong></span></div>
+    <nav><a href="/">← 오늘의 관심종목</a><a href="/tracking">추천·검색 종목 추적</a></nav>
+  </header>
+  {notice}
+  <section class="metrics">{metric_cards}</section>
+  <section class="panel">
+    <div class="section-head"><p>SUMMARY</p><h2>검증 범위</h2></div>
+    <div class="facts">
+      <div class="fact"><span>신호 거래일</span><strong>{int(summary.get('signal_days') or 0)}일</strong></div>
+      <div class="fact"><span>추천 기록</span><strong>{int(summary.get('signal_count') or 0)}건</strong></div>
+      <div class="fact"><span>고유 종목</span><strong>{int(summary.get('unique_tickers') or 0)}개</strong></div>
+      <div class="fact"><span>일평균 추천</span><strong>{float(summary.get('average_picks_per_day') or 0):.2f}개</strong></div>
+      <div class="fact"><span>목표가 선도달</span><strong>{int(summary.get('target_first_count') or 0)}건</strong></div>
+      <div class="fact"><span>손절가 선도달</span><strong>{int(summary.get('stop_first_count') or 0)}건</strong></div>
+      <div class="fact"><span>최대 유리폭 평균</span><strong>{_format_return(_backtest_number(summary.get('mfe', {}).get('average_pct')))}</strong></div>
+      <div class="fact"><span>최대 불리폭 평균</span><strong>{_format_return(_backtest_number(summary.get('mae', {}).get('average_pct')))}</strong></div>
+    </div>
+  </section>
+  {_render_backtest_group('전략별 성과', summary.get('by_strategy', {}))}
+  {_render_backtest_group('등급별 성과', summary.get('by_grade', {}))}
+  <section class="panel">
+    <div class="section-head"><p>DETAIL</p><h2>날짜별 추천 결과</h2></div>
+    <div class="table-wrap"><table><thead><tr><th>신호일 / 진입일</th><th>종목</th><th>등급 / 전략</th><th>진입가</th><th>D+5</th><th>D+10</th><th>D+20</th><th>D+20 시장초과</th><th>MFE / MAE</th><th>목표 / 손절</th></tr></thead><tbody>{details_html}</tbody></table></div>
+    <p class="caption">최근 신호는 아직 D+10·D+20 거래일이 지나지 않아 표본에서 자동 제외됩니다. MFE/MAE는 진입 이후 일봉 고가·저가 기준이며 같은 날 목표가와 손절가를 모두 터치한 경우 장중 순서를 추정하지 않습니다.</p>
+  </section>
+</div></body></html>"""
+
+
 @app.get("/", response_class=HTMLResponse)
 def dashboard(date: str | None = Query(default=None)) -> HTMLResponse:
     return HTMLResponse(render_dashboard(date))
@@ -1990,3 +2190,8 @@ def dashboard(date: str | None = Query(default=None)) -> HTMLResponse:
 @app.get("/tracking", response_class=HTMLResponse)
 def tracking() -> HTMLResponse:
     return HTMLResponse(render_tracking_page())
+
+
+@app.get("/backtest", response_class=HTMLResponse)
+def backtest() -> HTMLResponse:
+    return HTMLResponse(render_backtest_page())
