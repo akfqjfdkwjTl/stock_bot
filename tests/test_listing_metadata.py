@@ -10,12 +10,47 @@ import pandas as pd
 import stock_screener
 from stock_screener import (
     _attach_listing_metadata,
+    _find_listing_symbol,
     _load_listing_metadata,
+    _normalize_listing_symbols,
     _select_real_symbols,
 )
 
 
 class ListingMetadataTests(unittest.TestCase):
+    def test_stock_name_search_is_case_insensitive(self) -> None:
+        listing = _normalize_listing_symbols(
+            pd.DataFrame(
+                [{"Code": "035420", "Name": "NAVER", "Market": "KOSPI"}]
+            )
+        )
+
+        matched = _find_listing_symbol(listing, "naver")
+
+        self.assertEqual(matched.iloc[0]["Code"], "035420")
+
+    def test_common_korean_alias_resolves_official_english_name(self) -> None:
+        listing = _normalize_listing_symbols(
+            pd.DataFrame(
+                [{"Code": "035420", "Name": "NAVER", "Market": "KOSPI"}]
+            )
+        )
+
+        matched = _find_listing_symbol(listing, "네이버")
+
+        self.assertEqual(matched.iloc[0]["Name"], "NAVER")
+
+    def test_six_digit_code_search_is_unchanged(self) -> None:
+        listing = _normalize_listing_symbols(
+            pd.DataFrame(
+                [{"Code": "035420", "Name": "NAVER", "Market": "KOSPI"}]
+            )
+        )
+
+        matched = _find_listing_symbol(listing, "035420")
+
+        self.assertEqual(matched.iloc[0]["Name"], "NAVER")
+
     def test_price_listing_is_enriched_with_krx_description(self) -> None:
         listing = pd.DataFrame(
             [

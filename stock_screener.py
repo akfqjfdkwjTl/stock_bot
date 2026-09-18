@@ -24,6 +24,10 @@ from strategies import (
 VALID_STRATEGIES = ("short", "swing", "mid")
 _LISTING_METADATA_CACHE: pd.DataFrame | None = None
 
+STOCK_SEARCH_ALIASES = {
+    "네이버": "035420",
+}
+
 
 SAMPLE_STOCKS: list[dict[str, str]] = [
     {"ticker": "005930", "name": "삼성전자", "profile": "mid"},
@@ -227,6 +231,26 @@ def _normalize_listing_symbols(listing_df: pd.DataFrame) -> pd.DataFrame:
         data[column] = data[column].fillna("").astype(str).str.strip()
     data["Code"] = data["Code"].astype(str).str.zfill(6)
     return data.reset_index(drop=True)
+
+
+def _normalize_stock_name(value: object) -> str:
+    """Normalize user-facing stock names without changing official display names."""
+    return "".join(str(value or "").split()).casefold()
+
+
+def _find_listing_symbol(all_symbols: pd.DataFrame, query: str) -> pd.DataFrame:
+    """Resolve a six-digit code, official name, or registered common alias."""
+    clean_query = str(query or "").strip()
+    if clean_query.isdigit():
+        return all_symbols[all_symbols["Code"].eq(clean_query.zfill(6))]
+
+    normalized_query = _normalize_stock_name(clean_query)
+    alias_ticker = STOCK_SEARCH_ALIASES.get(normalized_query)
+    if alias_ticker:
+        return all_symbols[all_symbols["Code"].eq(alias_ticker)]
+
+    normalized_names = all_symbols["Name"].map(_normalize_stock_name)
+    return all_symbols[normalized_names.eq(normalized_query)]
 
 
 def _select_real_symbols(listing_df: pd.DataFrame) -> pd.DataFrame:
@@ -546,9 +570,7 @@ def debug_symbol(ticker_or_name: str) -> dict[str, Any]:
     all_symbols = _normalize_listing_symbols(listing_df)
     target_symbols = _select_real_symbols(listing_df)
 
-    code_query = query.zfill(6) if query.isdigit() else ""
-    mask = all_symbols["Code"].eq(code_query) if code_query else all_symbols["Name"].eq(query)
-    matched = all_symbols[mask]
+    matched = _find_listing_symbol(all_symbols, query)
     if matched.empty:
         return {
             "query": query,
