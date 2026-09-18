@@ -53,3 +53,8 @@ jobs:
         run: |
           ssh -i ~/.ssh/oracle.key -o BatchMode=yes "$ORACLE_USER@$ORACLE_HOST" \
             'cd /home/ubuntu/stock_bot && ./deploy.sh main'
+      - name: Run requested technical backtest
+        if: contains(github.event.head_commit.message, '[run-backtest]')
+        run: |
+          ssh -i ~/.ssh/oracle.key -o BatchMode=yes "$ORACLE_USER@$ORACLE_HOST" \
+            'cd /home/ubuntu/stock_bot && venv/bin/python backtester.py --days 30 --max-symbols 300'
