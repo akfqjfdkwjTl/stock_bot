@@ -1786,7 +1786,7 @@ def render_dashboard(selected_date: str | None = None) -> str:
       {date_controls}
       <p class="hero-note">SQLite 추천 데이터와 시장 지표를 한 화면에서 확인하는 서버용 FastAPI 대시보드입니다.</p>
       <a class="page-nav" href="/tracking">추천·검색 종목 추적 →</a>
-      <a class="page-nav" href="/backtest">1개월 기술적 백테스트 →</a>
+      <a class="page-nav" href="/backtest">6개월 기술적 백테스트 →</a>
     </header>
 
     <main class="content">
@@ -2020,7 +2020,7 @@ def render_tracking_page() -> str:
       <p class="eyebrow">PRICE TRACKING</p>
       <h1>추천·검색 종목 추적</h1>
       <p>기준가격을 고정하고 이후 거래일의 수익률, 최대 상승·하락폭, 목표가·손절가 도달 결과를 보여줍니다.</p>
-      <nav><a href="/">← 오늘의 관심종목으로</a> · <a href="/backtest">1개월 기술적 백테스트</a></nav>
+      <nav><a href="/">← 오늘의 관심종목으로</a> · <a href="/backtest">6개월 기술적 백테스트</a></nav>
     </header>
     <section class="stats">
       <div class="stat"><span>추적 건수</span><strong>{len(rows)}</strong></div>
@@ -2119,7 +2119,7 @@ def _render_backtest_group(title: str, groups: dict) -> str:
 
 
 def render_backtest_page() -> str:
-    """Render the latest technical-only one-month walk-forward backtest."""
+    """Render the latest technical-only six-month walk-forward backtest."""
     summary, rows, error = load_backtest_report()
     config = summary.get("config", {})
     period = (
@@ -2172,7 +2172,7 @@ def render_backtest_page() -> str:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>1개월 기술적 백테스트</title>
+  <title>6개월 기술적 백테스트</title>
   <style>
     :root {{ --bg:#070a0e; --panel:#101622; --panel2:#0d1219; --line:rgba(255,255,255,.1); --text:#f4f7fb; --muted:#8e9aad; --blue:#27b8ee; --green:#49e09a; --red:#ff7575; }}
     * {{ box-sizing:border-box; }}
@@ -2206,7 +2206,7 @@ def render_backtest_page() -> str:
 <body><div class="shell">
   <header>
     <p class="eyebrow">TECHNICAL WALK-FORWARD</p>
-    <h1>1개월 기술적 백테스트</h1>
+    <h1>6개월 기술적 백테스트</h1>
     <p>각 과거 거래일 종가까지만 사용해 현재 추천 로직을 다시 실행하고, 다음 거래일 시가 진입 기준 성과를 측정합니다. 뉴스·테마 점수는 0점으로 고정합니다.</p>
     <div class="run-meta"><span>신호 기간 <strong>{esc(period)}</strong></span><span>생성시각 <strong>{esc(summary.get('generated_at', 'N/A'))}</strong></span><span>유니버스 <strong>최대 {esc(config.get('max_symbols', 'N/A'))}종목</strong></span></div>
     <nav><a href="/">← 오늘의 관심종목</a><a href="/tracking">추천·검색 종목 추적</a></nav>

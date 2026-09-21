@@ -80,7 +80,7 @@ class BacktestPageTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         body = response.body.decode("utf-8")
-        self.assertIn("1개월 기술적 백테스트", body)
+        self.assertIn("6개월 기술적 백테스트", body)
         self.assertIn("삼성전자", body)
         self.assertIn("D+5 평균 수익률", body)
 

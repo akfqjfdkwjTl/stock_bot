@@ -46,7 +46,7 @@ def parse_args() -> BacktestConfig:
     parser.add_argument("--mode", default="real", choices=["real", "sample"])
     parser.add_argument("--start", help="신호 시작일 (YYYY-MM-DD)")
     parser.add_argument("--end", help="신호 종료일 (YYYY-MM-DD), 기본값 오늘")
-    parser.add_argument("--days", type=int, default=30, help="시작일 미지정 시 달력 기준 조회 일수")
+    parser.add_argument("--days", type=int, default=183, help="시작일 미지정 시 달력 기준 조회 일수 (기본 183일, 약 6개월)")
     parser.add_argument("--max-symbols", type=int, default=SETTINGS.max_symbols)
     parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
     args = parser.parse_args()
