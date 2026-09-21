@@ -15,23 +15,6 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
-name: Test and deploy to Oracle
-
-on:
-  push:
-    branches: [main]
-  workflow_dispatch:
-
-permissions:
-  contents: read
-
-concurrency:
-  group: stock-bot-production
-  cancel-in-progress: false
-
-jobs:
-  test:
-    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -74,47 +57,4 @@ jobs:
         if: contains(github.event.head_commit.message, '[run-backtest]')
         run: |
           ssh -i ~/.ssh/oracle.key -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=20 "$ORACLE_USER@$ORACLE_HOST" \
-            'cd /home/ubuntu/stock_bot && venv/bin/python backtester.py --days 183 --max-symbols 300'
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-      - name: Run tests
-        run: python -m unittest discover -s tests -p "test_*.py"
-
-  deploy:
-    needs: test
-    runs-on: ubuntu-latest
-    environment: production
-    env:
-      ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
-      ORACLE_USER: ${{ secrets.ORACLE_USER }}
-      ORACLE_SSH_PRIVATE_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
-      ORACLE_KNOWN_HOSTS: ${{ secrets.ORACLE_KNOWN_HOSTS }}
-    steps:
-      - name: Validate deployment secrets
-        run: |
-          test -n "$ORACLE_HOST"
-          test -n "$ORACLE_USER"
-          test -n "$ORACLE_SSH_PRIVATE_KEY"
-          test -n "$ORACLE_KNOWN_HOSTS"
-      - name: Configure SSH
-        run: |
-          install -m 700 -d ~/.ssh
-          printf '%s\n' "$ORACLE_SSH_PRIVATE_KEY" > ~/.ssh/oracle.key
-          chmod 600 ~/.ssh/oracle.key
-          printf '%s\n' "$ORACLE_KNOWN_HOSTS" > ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/known_hosts
-      - name: Pull main and restart PM2
-        run: |
-          ssh -i ~/.ssh/oracle.key -o BatchMode=yes "$ORACLE_USER@$ORACLE_HOST" \
-            'cd /home/ubuntu/stock_bot && ./deploy.sh main'
-      - name: Run requested technical backtest
-        if: contains(github.event.head_commit.message, '[run-backtest]')
-        run: |
-          ssh -i ~/.ssh/oracle.key -o BatchMode=yes "$ORACLE_USER@$ORACLE_HOST" \
             'cd /home/ubuntu/stock_bot && venv/bin/python backtester.py --days 183 --max-symbols 300'
