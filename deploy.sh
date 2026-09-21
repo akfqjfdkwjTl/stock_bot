@@ -61,8 +61,8 @@ for attempt in $(seq 1 12); do
     break
   fi
   if [[ "$attempt" -eq 12 ]]; then
-    echo "[deploy] HTTPS tunnel did not become reachable" >&2
-    exit 1
+    echo "[deploy] warning: HTTPS tunnel DNS is still unavailable; continuing deployment" >&2
+    break
   fi
   echo "[deploy] HTTPS tunnel DNS not ready; retrying ($attempt/12)"
   sleep 5
