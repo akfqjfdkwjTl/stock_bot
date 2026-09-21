@@ -52,7 +52,7 @@ fi
 
 TUNNEL_URL="$(cat data/tunnel-url.txt)"
 echo "[deploy] HTTPS dashboard: $TUNNEL_URL"
-pm2 restart stock-bot --update-env
+# stock-tunnel updates .env and restarts stock-bot when its URL changes.
 pm2 save
 
 echo "[deploy] verifying HTTPS tunnel"
