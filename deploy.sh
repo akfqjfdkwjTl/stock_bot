@@ -16,9 +16,47 @@ if [[ -f .env ]] && grep -qx 'MAX_SYMBOLS=100' .env; then
   echo "[deploy] expanded MAX_SYMBOLS from 100 to 300"
 fi
 
-echo "[deploy] restarting PM2 apps"
-pm2 restart stock-bot --update-env
+echo "[deploy] installing cloudflared when needed"
+if ! command -v cloudflared >/dev/null 2>&1; then
+  ARCH="$(dpkg --print-architecture)"
+  case "$ARCH" in
+    amd64|arm64) ;;
+    *) echo "[deploy] unsupported architecture: $ARCH" >&2; exit 1 ;;
+  esac
+  CLOUDFLARED_DEB="/tmp/cloudflared-${ARCH}.deb"
+  curl -fsSL "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${ARCH}.deb" -o "$CLOUDFLARED_DEB"
+  sudo dpkg -i "$CLOUDFLARED_DEB"
+fi
+
+echo "[deploy] restarting web app"
 pm2 restart stock-web --update-env
+
+echo "[deploy] starting HTTPS tunnel"
+mkdir -p data
+rm -f data/tunnel-url.txt
+if pm2 describe stock-tunnel >/dev/null 2>&1; then
+  pm2 restart stock-tunnel --update-env
+else
+  pm2 start cloudflare_tunnel.py --name stock-tunnel --interpreter "$APP_DIR/venv/bin/python"
+fi
+
+for _ in $(seq 1 45); do
+  [[ -s data/tunnel-url.txt ]] && break
+  sleep 1
+done
+if [[ ! -s data/tunnel-url.txt ]]; then
+  echo "[deploy] HTTPS tunnel URL was not created" >&2
+  pm2 logs stock-tunnel --lines 80 --nostream
+  exit 1
+fi
+
+TUNNEL_URL="$(cat data/tunnel-url.txt)"
+echo "[deploy] HTTPS dashboard: $TUNNEL_URL"
+pm2 restart stock-bot --update-env
+pm2 save
+
+echo "[deploy] verifying HTTPS tunnel"
+curl -fsS --connect-timeout 10 --max-time 90 -o /dev/null "$TUNNEL_URL/docs"
 
 echo "[deploy] PM2 status"
 pm2 status

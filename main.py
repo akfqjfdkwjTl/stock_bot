@@ -19,7 +19,7 @@ from telegram_sender import send_telegram_message, send_telegram_photo
 VALID_STRATEGIES = ("short", "swing", "mid")
 KST = ZoneInfo("Asia/Seoul")
 UNCLASSIFIED_SECTOR = "미분류"
-DASHBOARD_URL = "http://168.110.116.149:8000"
+DASHBOARD_URL = os.getenv("DASHBOARD_URL", "http://168.110.116.149:8000").strip()
 DASHBOARD_IMAGE_PATH = "dashboard.png"
 
 SECTOR_GROUPS = {
