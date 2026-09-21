@@ -6,6 +6,8 @@ import csv
 import html
 import json
 import sqlite3
+import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from functools import lru_cache
@@ -33,6 +35,58 @@ BACKTEST_ROWS_PATH = BACKTEST_DIR / "technical_backtest_latest.csv"
 KST = ZoneInfo("Asia/Seoul")
 
 app = FastAPI(title="Stock Dashboard")
+
+PAGE_CACHE_TTL_SECONDS = 10 * 60
+PAGE_CACHE_MAX_ENTRIES = 32
+_page_cache: dict[str, tuple[float, str]] = {}
+_page_cache_lock = threading.RLock()
+_page_render_locks: dict[str, threading.Lock] = {}
+_page_refreshing: set[str] = set()
+
+
+def _store_cached_page(key: str, rendered: str) -> None:
+    with _page_cache_lock:
+        if key not in _page_cache and len(_page_cache) >= PAGE_CACHE_MAX_ENTRIES:
+            oldest_key = min(_page_cache, key=lambda item: _page_cache[item][0])
+            _page_cache.pop(oldest_key, None)
+        _page_cache[key] = (time.monotonic(), rendered)
+
+
+def _refresh_cached_page(key: str, renderer) -> None:
+    try:
+        _store_cached_page(key, renderer())
+    finally:
+        with _page_cache_lock:
+            _page_refreshing.discard(key)
+
+
+def render_cached_page(key: str, renderer) -> str:
+    """Return cached HTML immediately and refresh stale pages in the background."""
+    now = time.monotonic()
+    with _page_cache_lock:
+        cached = _page_cache.get(key)
+        if cached is not None:
+            created_at, rendered = cached
+            if now - created_at >= PAGE_CACHE_TTL_SECONDS and key not in _page_refreshing:
+                _page_refreshing.add(key)
+                threading.Thread(
+                    target=_refresh_cached_page,
+                    args=(key, renderer),
+                    daemon=True,
+                    name=f"page-cache-{key}",
+                ).start()
+            return rendered
+        render_lock = _page_render_locks.setdefault(key, threading.Lock())
+
+    # Only the first cold request performs the expensive market-data lookups.
+    with render_lock:
+        with _page_cache_lock:
+            cached = _page_cache.get(key)
+            if cached is not None:
+                return cached[1]
+        rendered = renderer()
+        _store_cached_page(key, rendered)
+        return rendered
 
 
 @dataclass
@@ -2184,14 +2238,16 @@ def render_backtest_page() -> str:
 
 @app.get("/", response_class=HTMLResponse)
 def dashboard(date: str | None = Query(default=None)) -> HTMLResponse:
-    return HTMLResponse(render_dashboard(date))
+    cache_key = f"dashboard:{date or 'latest'}"
+    return HTMLResponse(render_cached_page(cache_key, lambda: render_dashboard(date)))
 
 
 @app.get("/tracking", response_class=HTMLResponse)
 def tracking() -> HTMLResponse:
-    return HTMLResponse(render_tracking_page())
+    return HTMLResponse(render_cached_page("tracking", render_tracking_page))
 
 
 @app.get("/backtest", response_class=HTMLResponse)
 def backtest() -> HTMLResponse:
-    return HTMLResponse(render_backtest_page())
+    return HTMLResponse(render_cached_page("backtest", render_backtest_page))
+
