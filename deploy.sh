@@ -56,7 +56,17 @@ echo "[deploy] HTTPS dashboard: $TUNNEL_URL"
 pm2 save
 
 echo "[deploy] verifying HTTPS tunnel"
-curl -fsS --connect-timeout 10 --max-time 90 -o /dev/null "$TUNNEL_URL/docs"
+for attempt in $(seq 1 12); do
+  if curl -fsS --connect-timeout 5 --max-time 15 -o /dev/null "$TUNNEL_URL/docs"; then
+    break
+  fi
+  if [[ "$attempt" -eq 12 ]]; then
+    echo "[deploy] HTTPS tunnel did not become reachable" >&2
+    exit 1
+  fi
+  echo "[deploy] HTTPS tunnel DNS not ready; retrying ($attempt/12)"
+  sleep 5
+done
 
 echo "[deploy] PM2 status"
 pm2 status
