@@ -8,6 +8,7 @@ import pandas as pd
 
 from stock_screener import _build_sample_ohlcv, _market_regime_is_favorable
 from strategies import (
+    _calculate_common_metrics,
     _passes_downside_risk_filter,
     _score_breakout,
     _score_relative_strength,
@@ -20,6 +21,12 @@ from strategies import (
 
 
 class TechnicalStrengthScoreTests(unittest.TestCase):
+    def test_invalid_zero_open_price_is_rejected(self) -> None:
+        prepared = prepare_indicators(_build_sample_ohlcv(seed=500, profile="mid"))
+        prepared.loc[prepared.index[-1], "시가"] = 0
+
+        self.assertIsNone(_calculate_common_metrics(prepared))
+
     def test_market_regime_requires_rising_20_and_60_day_trend(self) -> None:
         dates = pd.bdate_range("2026-01-01", periods=80)
         rising = pd.DataFrame({"Close": range(100, 180)}, index=dates)

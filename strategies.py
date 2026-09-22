@@ -108,6 +108,7 @@ def _calculate_common_metrics(df: pd.DataFrame) -> Optional[dict[str, Any]]:
     prev = df.iloc[-2]
 
     required_values = [
+        latest["시가"],
         latest["종가"],
         prev["종가"],
         latest["거래량"],
@@ -126,6 +127,9 @@ def _calculate_common_metrics(df: pd.DataFrame) -> Optional[dict[str, Any]]:
         latest["range20"],
     ]
     if any(pd.isna(value) for value in required_values):
+        return None
+
+    if latest["시가"] <= 0 or prev["종가"] <= 0:
         return None
 
     if latest["종가"] < SETTINGS.min_price:
