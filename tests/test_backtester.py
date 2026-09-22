@@ -66,9 +66,10 @@ class TechnicalBacktesterTests(unittest.TestCase):
 
         self.assertEqual(row["entry_date"], "2026-08-04")
         self.assertEqual(row["entry_price"], 100)
-        self.assertEqual(row["d5_return_pct"], 5.0)
-        self.assertEqual(row["d10_return_pct"], 10.0)
-        self.assertEqual(row["d20_return_pct"], 20.0)
+        self.assertAlmostEqual(row["d5_return_pct"], 4.591, places=3)
+        self.assertAlmostEqual(row["d10_return_pct"], 9.5715, places=3)
+        self.assertAlmostEqual(row["d20_return_pct"], 19.5326, places=3)
+        self.assertAlmostEqual(row["strategy_return_pct"], 9.5715, places=3)
         self.assertEqual(row["first_exit"], "TARGET_FIRST")
         self.assertIsNotNone(row["d5_excess_return_pct"])
 
@@ -85,7 +86,22 @@ class TechnicalBacktesterTests(unittest.TestCase):
             1,
         )
 
-        self.assertEqual(row["first_exit"], "SAME_DAY")
+        self.assertEqual(row["first_exit"], "STOP_FIRST")
+        self.assertTrue(row["same_day_collision"])
+
+    def test_large_next_day_gap_up_is_not_chased(self) -> None:
+        history = _history()
+        history.iloc[1, history.columns.get_loc("시가")] = 103
+
+        row = _measure_selection(
+            _candidate(),
+            history,
+            None,
+            history.index[0],
+            1,
+        )
+
+        self.assertIsNone(row)
 
     def test_news_fields_are_forced_to_zero(self) -> None:
         candidate = {"ticker": "005930", "news_score": 9, "theme": "AI"}

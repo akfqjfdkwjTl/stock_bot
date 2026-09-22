@@ -469,7 +469,7 @@ def _can_add_candidate(
 
 
 def _select_diversified_candidates(candidates: list[dict], limit: int) -> list[dict]:
-    """점수순을 유지하되 동일 섹터/산업군 쏠림을 제한합니다."""
+    """점수순을 유지하면서 동일 섹터 쏠림만 제한합니다."""
     eligible = list(candidates)
     eligible.sort(key=lambda row: row["recommendation_score"], reverse=True)
 
@@ -485,55 +485,6 @@ def _select_diversified_candidates(candidates: list[dict], limit: int) -> list[d
         selected.append(candidate)
         sector_counts[candidate["sector_group"]] += 1
         industry_counts[candidate["industry_group"]] += 1
-
-    available_sectors = {
-        row["sector_group"]
-        for row in eligible
-        if row["sector_group"] != UNCLASSIFIED_SECTOR
-    }
-    target_sector_count = min(3, len(available_sectors), limit)
-    selected_sectors = {
-        row["sector_group"]
-        for row in selected
-        if row["sector_group"] != UNCLASSIFIED_SECTOR
-    }
-    if len(selected_sectors) < target_sector_count:
-        selected_tickers = {row["ticker"] for row in selected}
-        for candidate in eligible:
-            if len(selected_sectors) >= target_sector_count:
-                break
-            if candidate["sector_group"] == UNCLASSIFIED_SECTOR:
-                continue
-            if candidate["ticker"] in selected_tickers or candidate["sector_group"] in selected_sectors:
-                continue
-            replace_index = next(
-                (
-                    index
-                    for index, row in sorted(
-                        enumerate(selected),
-                        key=lambda pair: pair[1]["recommendation_score"],
-                    )
-                    if (
-                        row["sector_group"] == UNCLASSIFIED_SECTOR
-                        or sector_counts[row["sector_group"]] > 1
-                    )
-                ),
-                None,
-            )
-            if replace_index is None:
-                continue
-            removed = selected[replace_index]
-            sector_counts[removed["sector_group"]] -= 1
-            industry_counts[removed["industry_group"]] -= 1
-            selected[replace_index] = candidate
-            sector_counts[candidate["sector_group"]] += 1
-            industry_counts[candidate["industry_group"]] += 1
-            selected_tickers = {row["ticker"] for row in selected}
-            selected_sectors = {
-                row["sector_group"]
-                for row in selected
-                if row["sector_group"] != UNCLASSIFIED_SECTOR
-            }
 
     selected.sort(key=lambda row: row["recommendation_score"], reverse=True)
     return selected[:limit]
@@ -561,6 +512,7 @@ def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dic
                 "news_items": item.get("news_items", []),
                 "listing_sector": item.get("listing_sector", ""),
                 "listing_industry": item.get("listing_industry", ""),
+                "market_regime_pass": item.get("market_regime_pass", True),
                 "short_score": 0,
                 "swing_score": 0,
                 "mid_score": 0,
@@ -589,6 +541,7 @@ def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dic
             entry["news_items"] = item.get("news_items", entry.get("news_items", []))
             entry["listing_sector"] = item.get("listing_sector", entry.get("listing_sector", ""))
             entry["listing_industry"] = item.get("listing_industry", entry.get("listing_industry", ""))
+            entry["market_regime_pass"] = item.get("market_regime_pass", entry.get("market_regime_pass", True))
             _copy_score_fields(entry, item)
             _copy_strategy_trade_levels(entry, item, "short")
 
@@ -610,6 +563,7 @@ def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dic
                 "news_items": item.get("news_items", []),
                 "listing_sector": item.get("listing_sector", ""),
                 "listing_industry": item.get("listing_industry", ""),
+                "market_regime_pass": item.get("market_regime_pass", True),
                 "short_score": 0,
                 "swing_score": 0,
                 "mid_score": 0,
@@ -643,6 +597,7 @@ def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dic
             entry["news_items"] = item.get("news_items", entry.get("news_items", []))
             entry["listing_sector"] = item.get("listing_sector", entry.get("listing_sector", ""))
             entry["listing_industry"] = item.get("listing_industry", entry.get("listing_industry", ""))
+            entry["market_regime_pass"] = item.get("market_regime_pass", entry.get("market_regime_pass", True))
             _copy_score_fields(entry, item)
             _copy_strategy_trade_levels(entry, item, "swing")
 
@@ -664,6 +619,7 @@ def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dic
                 "news_items": item.get("news_items", []),
                 "listing_sector": item.get("listing_sector", ""),
                 "listing_industry": item.get("listing_industry", ""),
+                "market_regime_pass": item.get("market_regime_pass", True),
                 "short_score": 0,
                 "swing_score": 0,
                 "mid_score": 0,
@@ -690,6 +646,7 @@ def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dic
             entry["news_items"] = item.get("news_items", entry.get("news_items", []))
             entry["listing_sector"] = item.get("listing_sector", entry.get("listing_sector", ""))
             entry["listing_industry"] = item.get("listing_industry", entry.get("listing_industry", ""))
+            entry["market_regime_pass"] = item.get("market_regime_pass", entry.get("market_regime_pass", True))
             _copy_score_fields(entry, item)
             _copy_strategy_trade_levels(entry, item, "mid")
 
@@ -749,7 +706,9 @@ def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dic
     selectable_candidates = [
         row
         for row in all_candidates
-        if row["recommendation_score"] >= SETTINGS.watch_min_score
+        if row["grade"] in ("A", "B")
+        and row["strategy_type"] != "short"
+        and row.get("market_regime_pass", True)
     ]
     selected = _select_diversified_candidates(selectable_candidates, SETTINGS.final_recommendation_limit)
     ranked_candidates = sorted(
@@ -759,7 +718,16 @@ def _build_final_recommendations(strategy_results: dict[str, list[dict]]) -> dic
     )
     selected_a = [row for row in selected if row["grade"] == "A"]
     selected_b = [row for row in selected if row["grade"] == "B"]
-    selected_observation = [row for row in selected if row["grade"] == "관찰"]
+    selected_tickers = {row["ticker"] for row in selected}
+    selected_observation = [
+        row
+        for row in ranked_candidates
+        if row["grade"] == "관찰"
+        and row["recommendation_score"] >= SETTINGS.watch_min_score
+        and row["strategy_type"] != "short"
+        and row.get("market_regime_pass", True)
+        and row["ticker"] not in selected_tickers
+    ][: SETTINGS.final_recommendation_limit]
 
     return {
         "grade_a": selected_a,
@@ -1158,7 +1126,7 @@ def generate_screening_payload(
         try:
             save_recommendations(
                 final_groups["grade_a"],
-                final_groups["grade_b"] + final_groups["watch"],
+                final_groups["grade_b"],
                 market="KR",
             )
         except Exception as exc:
@@ -1169,7 +1137,7 @@ def generate_screening_payload(
             mode=mode,
             generated_at=generated_at,
             grade_a_items=final_groups["grade_a"],
-            watch_items=final_groups["grade_b"] + final_groups["watch"],
+            watch_items=final_groups["grade_b"],
         )
         try:
             refresh_market_json()

@@ -57,7 +57,7 @@ class RecommendationSettingsTests(unittest.TestCase):
         self.assertEqual(_format_news_relevance("DIRECT"), "종목 직접 관련")
         self.assertEqual(_format_news_relevance("MISMATCH"), "비관련 기사 제외")
 
-    def test_watch_candidates_below_configured_minimum_are_not_selected(self) -> None:
+    def test_watch_candidates_are_display_only_and_not_selected(self) -> None:
         strategy_results = {
             "short": [],
             "swing": [],
@@ -90,10 +90,58 @@ class RecommendationSettingsTests(unittest.TestCase):
         with patch.object(SETTINGS, "watch_min_score", 40):
             result = _build_final_recommendations(strategy_results)
 
-        self.assertEqual([item["ticker"] for item in result["selected"]], ["105560"])
-        self.assertEqual(result["selected"][0]["recommendation_score"], 40.5)
-        self.assertEqual(result["selected"][0]["stop_loss"], 900)
-        self.assertEqual(result["selected"][0]["target_price"], 1200)
+        self.assertEqual(result["selected"], [])
+        self.assertEqual([item["ticker"] for item in result["watch"]], ["105560"])
+        self.assertEqual(result["watch"][0]["recommendation_score"], 40.5)
+
+    def test_short_only_candidate_is_not_auto_selected(self) -> None:
+        strategy_results = {
+            "short": [
+                {
+                    "ticker": "034020",
+                    "name": "두산에너빌리티",
+                    "current_price": 1000,
+                    "change_pct": 5,
+                    "trading_value": SETTINGS.min_trading_value,
+                    "total_score": 100,
+                    "theme": "원전",
+                    "news_score": 10,
+                    "stop_loss": 950,
+                    "target_price": 1060,
+                }
+            ],
+            "swing": [],
+            "mid": [],
+        }
+
+        result = _build_final_recommendations(strategy_results)
+
+        self.assertEqual(result["selected"], [])
+
+    def test_bearish_market_candidate_is_not_auto_selected(self) -> None:
+        strategy_results = {
+            "short": [],
+            "swing": [],
+            "mid": [
+                {
+                    "ticker": "005930",
+                    "name": "삼성전자",
+                    "current_price": 1000,
+                    "change_pct": 1,
+                    "trading_value": SETTINGS.min_trading_value,
+                    "total_score": 100,
+                    "theme": "반도체",
+                    "news_score": 10,
+                    "market_regime_pass": False,
+                    "stop_loss": 950,
+                    "target_price": 1180,
+                }
+            ],
+        }
+
+        result = _build_final_recommendations(strategy_results)
+
+        self.assertEqual(result["selected"], [])
 
     def test_grade_thresholds_come_from_settings(self) -> None:
         with (

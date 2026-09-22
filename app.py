@@ -2100,6 +2100,7 @@ def _render_backtest_group(title: str, groups: dict) -> str:
         d5 = metrics.get("d5", {})
         d10 = metrics.get("d10", {})
         d20 = metrics.get("d20", {})
+        strategy_return = metrics.get("strategy_return", {})
         rows.append(
             f"""
             <tr>
@@ -2107,13 +2108,14 @@ def _render_backtest_group(title: str, groups: dict) -> str:
               <td>{_format_return(_backtest_number(d5.get('average_pct')))}<small>승률 {_format_win_rate(_backtest_number(d5.get('win_rate_pct')))} / {int(d5.get('sample_count') or 0)}건</small></td>
               <td>{_format_return(_backtest_number(d10.get('average_pct')))}<small>승률 {_format_win_rate(_backtest_number(d10.get('win_rate_pct')))} / {int(d10.get('sample_count') or 0)}건</small></td>
               <td>{_format_return(_backtest_number(d20.get('average_pct')))}<small>승률 {_format_win_rate(_backtest_number(d20.get('win_rate_pct')))} / {int(d20.get('sample_count') or 0)}건</small></td>
+              <td>{_format_return(_backtest_number(strategy_return.get('average_pct')))}<small>승률 {_format_win_rate(_backtest_number(strategy_return.get('win_rate_pct')))} / {int(strategy_return.get('sample_count') or 0)}건</small></td>
             </tr>
             """
         )
     return f"""
       <section class="panel compact-table">
         <div class="section-head"><div><p>BREAKDOWN</p><h2>{esc(title)}</h2></div></div>
-        <div class="table-wrap"><table><thead><tr><th>구분</th><th>D+5</th><th>D+10</th><th>D+20</th></tr></thead><tbody>{''.join(rows)}</tbody></table></div>
+        <div class="table-wrap"><table><thead><tr><th>구분</th><th>D+5</th><th>D+10</th><th>D+20</th><th>실제 청산</th></tr></thead><tbody>{''.join(rows)}</tbody></table></div>
       </section>
     """
 
@@ -2134,6 +2136,7 @@ def render_backtest_page() -> str:
             _backtest_metric_card("D+10 평균 수익률", summary.get("d10", {})),
             _backtest_metric_card("D+20 평균 수익률", summary.get("d20", {})),
             _backtest_metric_card("D+20 시장초과", summary.get("d20_excess", {})),
+            _backtest_metric_card("실제 청산 수익률", summary.get("strategy_return", {})),
         )
     )
 
@@ -2142,12 +2145,15 @@ def render_backtest_page() -> str:
         "STOP_FIRST": "손절가 선도달",
         "SAME_DAY": "동일일 동시 도달",
         "OPEN": "기간 내 미도달",
+        "TIME_EXIT": "20거래일 기간청산",
         "NOT_SET": "기준 없음",
     }
     detail_rows = []
     for row in rows:
         d20 = _backtest_number(row.get("d20_return_pct"))
         d20_class = "up" if (d20 or 0) > 0 else "down" if (d20 or 0) < 0 else "neutral"
+        strategy_return = _backtest_number(row.get("strategy_return_pct"))
+        strategy_class = "up" if (strategy_return or 0) > 0 else "down" if (strategy_return or 0) < 0 else "neutral"
         detail_rows.append(
             f"""
             <tr>
@@ -2159,12 +2165,13 @@ def render_backtest_page() -> str:
               <td>{_format_return(_backtest_number(row.get('d10_return_pct')))}</td>
               <td class="{d20_class}"><strong>{_format_return(d20)}</strong></td>
               <td>{_format_return(_backtest_number(row.get('d20_excess_return_pct')))}</td>
+              <td class="{strategy_class}"><strong>{_format_return(strategy_return)}</strong><small>{esc(exit_labels.get(row.get('first_exit', ''), row.get('first_exit', '-') or '-'))}</small></td>
               <td>{_format_return(_backtest_number(row.get('mfe_pct')))}<small>MAE {_format_return(_backtest_number(row.get('mae_pct')))}</small></td>
-              <td>{esc(exit_labels.get(row.get('first_exit', ''), row.get('first_exit', '-') or '-'))}</td>
+              <td>목표 {_format_pick_price(_backtest_number(row.get('target_price')))}<small>손절 {_format_pick_price(_backtest_number(row.get('stop_price')))}</small></td>
             </tr>
             """
         )
-    details_html = "".join(detail_rows) or '<tr><td class="empty" colspan="10">표시할 추천 기록이 없습니다.</td></tr>'
+    details_html = "".join(detail_rows) or '<tr><td class="empty" colspan="11">표시할 추천 기록이 없습니다.</td></tr>'
     notice = f'<div class="notice">{esc(error)}</div>' if error else ""
 
     return f"""<!doctype html>
@@ -2207,7 +2214,7 @@ def render_backtest_page() -> str:
   <header>
     <p class="eyebrow">TECHNICAL WALK-FORWARD</p>
     <h1>6개월 기술적 백테스트</h1>
-    <p>각 과거 거래일 종가까지만 사용해 현재 추천 로직을 다시 실행하고, 다음 거래일 시가 진입 기준 성과를 측정합니다. 뉴스·테마 점수는 0점으로 고정합니다.</p>
+    <p>각 과거 거래일 종가까지만 사용해 현재 추천 로직을 다시 실행합니다. 다음 거래일 2% 초과 갭상승은 제외하고, 실제 진입가 기준 목표·손절과 거래비용을 반영합니다.</p>
     <div class="run-meta"><span>신호 기간 <strong>{esc(period)}</strong></span><span>생성시각 <strong>{esc(summary.get('generated_at', 'N/A'))}</strong></span><span>유니버스 <strong>최대 {esc(config.get('max_symbols', 'N/A'))}종목</strong></span></div>
     <nav><a href="/">← 오늘의 관심종목</a><a href="/tracking">추천·검색 종목 추적</a></nav>
   </header>
@@ -2230,8 +2237,8 @@ def render_backtest_page() -> str:
   {_render_backtest_group('등급별 성과', summary.get('by_grade', {}))}
   <section class="panel">
     <div class="section-head"><p>DETAIL</p><h2>날짜별 추천 결과</h2></div>
-    <div class="table-wrap"><table><thead><tr><th>신호일 / 진입일</th><th>종목</th><th>등급 / 전략</th><th>진입가</th><th>D+5</th><th>D+10</th><th>D+20</th><th>D+20 시장초과</th><th>MFE / MAE</th><th>목표 / 손절</th></tr></thead><tbody>{details_html}</tbody></table></div>
-    <p class="caption">최근 신호는 아직 D+10·D+20 거래일이 지나지 않아 표본에서 자동 제외됩니다. MFE/MAE는 진입 이후 일봉 고가·저가 기준이며 같은 날 목표가와 손절가를 모두 터치한 경우 장중 순서를 추정하지 않습니다.</p>
+    <div class="table-wrap"><table><thead><tr><th>신호일 / 진입일</th><th>종목</th><th>등급 / 전략</th><th>진입가</th><th>D+5</th><th>D+10</th><th>D+20</th><th>D+20 시장초과</th><th>실제 청산</th><th>MFE / MAE</th><th>목표 / 손절</th></tr></thead><tbody>{details_html}</tbody></table></div>
+    <p class="caption">수익률에는 매수·매도 슬리피지와 비용을 반영합니다. 같은 날 목표가와 손절가를 모두 터치하면 손절을 먼저 적용하며, 둘 다 미도달하면 20거래일 종가에 청산합니다.</p>
   </section>
 </div></body></html>"""
 
@@ -2250,4 +2257,3 @@ def tracking() -> HTMLResponse:
 @app.get("/backtest", response_class=HTMLResponse)
 def backtest() -> HTMLResponse:
     return HTMLResponse(render_cached_page("backtest", render_backtest_page))
-

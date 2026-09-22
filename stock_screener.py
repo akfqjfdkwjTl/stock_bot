@@ -153,6 +153,28 @@ def _build_sample_ohlcv(seed: int, profile: str) -> pd.DataFrame:
     return pd.DataFrame(rows).set_index("날짜")
 
 
+def _market_regime_is_favorable(benchmark_df: pd.DataFrame | None) -> bool:
+    """기준지수가 중기 상승 추세일 때만 신규 추천을 허용합니다.
+
+    기준지수 조회가 실패했거나 이력이 부족한 경우에는 기존 운영을 멈추지 않도록
+    통과 처리하고, 정상 데이터가 있을 때만 추세 필터를 적용합니다.
+    """
+    if benchmark_df is None or benchmark_df.empty:
+        return True
+    close_column = "종가" if "종가" in benchmark_df.columns else "Close"
+    if close_column not in benchmark_df.columns:
+        return True
+    close = pd.to_numeric(benchmark_df[close_column], errors="coerce").dropna()
+    if len(close) < 65:
+        return True
+    ma20 = close.rolling(20).mean()
+    ma60 = close.rolling(60).mean()
+    return bool(
+        close.iloc[-1] > ma20.iloc[-1] > ma60.iloc[-1]
+        and ma20.iloc[-1] > ma20.iloc[-6]
+    )
+
+
 def _evaluate_dataframe(
     ticker: str,
     name: str,
@@ -164,6 +186,7 @@ def _evaluate_dataframe(
     results: list[dict[str, Any]] = []
     df = prepare_indicators(raw_df)
     df = attach_relative_strength(df, benchmark_df)
+    market_regime_pass = _market_regime_is_favorable(benchmark_df)
     evaluator_map = {
         "short": (evaluate_short_strategy, evaluate_short_fallback),
         "swing": (evaluate_swing_strategy, evaluate_swing_fallback),
@@ -183,6 +206,7 @@ def _evaluate_dataframe(
             if candidate is None:
                 candidate = fallback_evaluator(ticker, name, df)
             if candidate:
+                candidate["market_regime_pass"] = market_regime_pass
                 results.append(candidate)
         except Exception as exc:
             results.append(

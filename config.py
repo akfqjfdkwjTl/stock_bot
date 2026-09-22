@@ -49,6 +49,10 @@ class Settings:
     backtest_take_profit_pct: float = float(os.getenv("BACKTEST_TAKE_PROFIT_PCT", "10"))
     backtest_stop_loss_pct: float = float(os.getenv("BACKTEST_STOP_LOSS_PCT", "5"))
     backtest_hold_days: int = int(os.getenv("BACKTEST_HOLD_DAYS", "10"))
+    backtest_max_entry_gap_pct: float = float(os.getenv("BACKTEST_MAX_ENTRY_GAP_PCT", "2"))
+    backtest_slippage_bps: float = float(os.getenv("BACKTEST_SLIPPAGE_BPS", "10"))
+    backtest_buy_fee_bps: float = float(os.getenv("BACKTEST_BUY_FEE_BPS", "2"))
+    backtest_sell_fee_tax_bps: float = float(os.getenv("BACKTEST_SELL_FEE_TAX_BPS", "17"))
 
     # 공통 제외 조건
     min_price: int = 1000

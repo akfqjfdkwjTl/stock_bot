@@ -676,7 +676,16 @@ def evaluate_mid_strategy(ticker: str, name: str, df: pd.DataFrame) -> Optional[
         return None
     if latest["종가"] < metrics["high60"] * 0.92:
         return None
-    if metrics["daily_change_pct"] > 12:
+    if metrics["daily_change_pct"] > 8:
+        return None
+    if metrics["high52_ratio"] < 0.90:
+        return None
+    relative_strength_values = (
+        metrics["rs_1m"],
+        metrics["rs_3m"],
+        metrics["rs_6m"],
+    )
+    if metrics["rs_3m"] <= 0 or sum(value > 0 for value in relative_strength_values) < 2:
         return None
 
     stop_price = latest["ma20"] * 0.97
@@ -711,54 +720,8 @@ def evaluate_mid_strategy(ticker: str, name: str, df: pd.DataFrame) -> Optional[
 
 
 def evaluate_mid_fallback(ticker: str, name: str, df: pd.DataFrame) -> Optional[dict[str, Any]]:
-    """중기 전략의 보조 후보입니다."""
-    metrics = _calculate_common_metrics(df)
-    if metrics is None:
-        return None
-
-    latest = metrics["latest"]
-
-    if not _passes_downside_risk_filter(metrics, SETTINGS.min_mid_fallback_daily_change_pct):
-        return None
-    if metrics["ma20_slope"] < 0 or metrics["ma60_slope"] <= -0.10:
-        return None
-    if latest["종가"] <= latest["ma20"] * 0.97:
-        return None
-    if latest["종가"] < metrics["high60"] * 0.85:
-        return None
-
-    stop_price = latest["ma20"] * 0.96
-    target_price = latest["종가"] * 1.15
-    score_parts = {
-        "liquidity": _score_liquidity(metrics),
-        "volume": max(_score_volume(metrics), 3),
-        "trend": _score_ma_trend(metrics, require_mid_trend=True),
-        "breakout": _score_breakout(metrics, near_high=True),
-        "box": _score_box_breakout(metrics),
-        "vcp": _score_vcp(metrics),
-        "rs": _score_relative_strength(metrics),
-        "risk": _score_risk_reward(metrics, stop_price, target_price),
-        "overheat": _score_not_overheated(metrics),
-    }
-    if sum(score_parts.values()) < 24:
-        return None
-
-    reasons = [
-        "중기 이동평균 흐름이 아직 크게 꺾이지 않았습니다.",
-        "60일 고점권 근처 재정비 구간으로 볼 수 있습니다.",
-        "엄격 조건보다 완화된 중기 보조 기준으로 선별했습니다.",
-    ]
-
-    return _build_candidate(
-        "mid",
-        ticker,
-        name,
-        metrics,
-        stop_price,
-        target_price,
-        reasons,
-        score_parts,
-    )
+    """성과 검증 결과에 따라 완화형 중기 후보는 자동추천에서 사용하지 않습니다."""
+    return None
 
 
 def diagnose_strategy_filters(ticker: str, name: str, df: pd.DataFrame) -> dict[str, Any]:

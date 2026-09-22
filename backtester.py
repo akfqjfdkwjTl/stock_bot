@@ -16,7 +16,6 @@ import pandas as pd
 
 from config import SETTINGS
 from main import _build_final_recommendations
-from performance_tracker import calculate_tracking_performance
 from stock_screener import (
     SAMPLE_STOCKS,
     _attach_listing_metadata,
@@ -224,6 +223,105 @@ def _return_pct(reference: float, value: float) -> float:
     return round((value / reference - 1) * 100, 4)
 
 
+def _net_return_pct(entry_price: float, exit_price: float) -> float:
+    """매수·매도 슬리피지와 비용을 반영한 수익률입니다."""
+    buy_cost_rate = (SETTINGS.backtest_slippage_bps + SETTINGS.backtest_buy_fee_bps) / 10_000
+    sell_cost_rate = (
+        SETTINGS.backtest_slippage_bps + SETTINGS.backtest_sell_fee_tax_bps
+    ) / 10_000
+    effective_entry = entry_price * (1 + buy_cost_rate)
+    effective_exit = exit_price * (1 - sell_cost_rate)
+    return _return_pct(effective_entry, effective_exit)
+
+
+def _entry_adjusted_levels(
+    candidate: dict[str, Any],
+    entry_price: float,
+) -> tuple[float | None, float | None]:
+    """신호일 손익비를 실제 다음 날 시가에 맞춰 다시 계산합니다."""
+    signal_close = float(candidate.get("current_price") or 0)
+    target = candidate.get("target_price")
+    stop = candidate.get("stop_loss")
+    if signal_close <= 0:
+        return None, None
+
+    adjusted_target = None
+    if target is not None and float(target) > signal_close:
+        adjusted_target = entry_price * (float(target) / signal_close)
+
+    adjusted_stop = None
+    if stop is not None and 0 < float(stop) < signal_close:
+        adjusted_stop = entry_price * (float(stop) / signal_close)
+    return adjusted_target, adjusted_stop
+
+
+def _simulate_trade_exit(
+    entry_price: float,
+    forward: pd.DataFrame,
+    target_price: float | None,
+    stop_price: float | None,
+) -> dict[str, Any]:
+    """목표·손절 선도달을 실제 청산으로 반영합니다.
+
+    같은 일봉에서 목표와 손절이 모두 닿으면 체결 순서를 알 수 없으므로 손절을
+    먼저 적용해 과대평가를 막습니다.
+    """
+    exit_price = None
+    exit_date = ""
+    exit_reason = "TIME_EXIT"
+    same_day_collision = False
+
+    for index, row in forward.iterrows():
+        row_open = float(row["시가"])
+        row_high = float(row["고가"])
+        row_low = float(row["저가"])
+        row_date = pd.Timestamp(index).date().isoformat()
+
+        if stop_price is not None and row_open <= stop_price:
+            exit_price = row_open
+            exit_date = row_date
+            exit_reason = "STOP_FIRST"
+            break
+        if target_price is not None and row_open >= target_price:
+            exit_price = row_open
+            exit_date = row_date
+            exit_reason = "TARGET_FIRST"
+            break
+
+        target_hit = target_price is not None and row_high >= target_price
+        stop_hit = stop_price is not None and row_low <= stop_price
+        if target_hit and stop_hit:
+            exit_price = stop_price
+            exit_date = row_date
+            exit_reason = "STOP_FIRST"
+            same_day_collision = True
+            break
+        if stop_hit:
+            exit_price = stop_price
+            exit_date = row_date
+            exit_reason = "STOP_FIRST"
+            break
+        if target_hit:
+            exit_price = target_price
+            exit_date = row_date
+            exit_reason = "TARGET_FIRST"
+            break
+
+    if exit_price is None and not forward.empty:
+        exit_price = float(forward.iloc[-1]["종가"])
+        exit_date = pd.Timestamp(forward.index[-1]).date().isoformat()
+
+    return {
+        "strategy_return_pct": (
+            _net_return_pct(entry_price, float(exit_price)) if exit_price is not None else None
+        ),
+        "exit_price": round(float(exit_price), 2) if exit_price is not None else None,
+        "exit_date": exit_date,
+        "first_exit": exit_reason,
+        "same_day_collision": same_day_collision,
+    }
+
+
 def _benchmark_returns(
     benchmark: pd.DataFrame | None,
     entry_date: pd.Timestamp,
@@ -262,22 +360,45 @@ def _measure_selection(
     entry_row = raw_df.iloc[entry_index]
     entry_date = pd.Timestamp(raw_df.index[entry_index])
     entry_price = float(entry_row["시가"])
+    signal_close = float(candidate.get("current_price") or 0)
+    if signal_close <= 0:
+        return None
+    entry_gap_pct = _return_pct(signal_close, entry_price)
+    if entry_gap_pct > SETTINGS.backtest_max_entry_gap_pct:
+        return None
+
     forward = raw_df.iloc[entry_index : entry_index + max(HORIZONS)]
-    observations = [
-        {
-            "date": pd.Timestamp(index).date().isoformat(),
-            "high": float(row["고가"]),
-            "low": float(row["저가"]),
-            "close": float(row["종가"]),
-        }
-        for index, row in forward.iterrows()
-    ]
-    performance = calculate_tracking_performance(
-        reference_price=entry_price,
-        reference_date=pd.Timestamp(signal_date).date().isoformat(),
-        observations=observations,
-        target_price=candidate.get("target_price"),
-        stop_price=candidate.get("stop_loss"),
+    target_price, stop_price = _entry_adjusted_levels(candidate, entry_price)
+    performance: dict[str, Any] = {
+        "latest_price": float(forward.iloc[-1]["종가"]) if not forward.empty else None,
+        "latest_price_date": (
+            pd.Timestamp(forward.index[-1]).date().isoformat() if not forward.empty else ""
+        ),
+        "latest_return_pct": (
+            _net_return_pct(entry_price, float(forward.iloc[-1]["종가"]))
+            if not forward.empty
+            else None
+        ),
+        "mfe_pct": (
+            _net_return_pct(entry_price, float(forward["고가"].max()))
+            if not forward.empty
+            else None
+        ),
+        "mae_pct": (
+            _net_return_pct(entry_price, float(forward["저가"].min()))
+            if not forward.empty
+            else None
+        ),
+        "observed_sessions": len(forward),
+    }
+    for horizon in HORIZONS:
+        performance[f"d{horizon}_return_pct"] = (
+            _net_return_pct(entry_price, float(forward.iloc[horizon - 1]["종가"]))
+            if len(forward) >= horizon
+            else None
+        )
+    performance.update(
+        _simulate_trade_exit(entry_price, forward, target_price, stop_price)
     )
     benchmark_metrics = _benchmark_returns(benchmark, entry_date)
     excess_metrics: dict[str, float | None] = {}
@@ -300,10 +421,11 @@ def _measure_selection(
         "strategy": candidate.get("strategy_type", ""),
         "grade": candidate.get("grade", ""),
         "score": candidate.get("recommendation_score", 0),
-        "signal_close": candidate.get("current_price"),
+        "signal_close": signal_close,
+        "entry_gap_pct": entry_gap_pct,
         "entry_price": round(entry_price, 2),
-        "stop_price": candidate.get("stop_loss"),
-        "target_price": candidate.get("target_price"),
+        "stop_price": round(stop_price, 2) if stop_price is not None else None,
+        "target_price": round(target_price, 2) if target_price is not None else None,
         **performance,
         **benchmark_metrics,
         **excess_metrics,
@@ -332,6 +454,7 @@ def _group_summary(rows: list[dict[str, Any]], key: str) -> dict[str, Any]:
             "d5": _metric_summary(items, "d5_return_pct"),
             "d10": _metric_summary(items, "d10_return_pct"),
             "d20": _metric_summary(items, "d20_return_pct"),
+            "strategy_return": _metric_summary(items, "strategy_return_pct"),
         }
         for name, items in sorted(grouped.items())
     }
@@ -350,7 +473,13 @@ def _build_summary(
     return {
         "method": "technical_only_walk_forward",
         "news_score": 0,
-        "entry_rule": "신호 다음 거래일 시가",
+        "entry_rule": "신호 다음 거래일 시가, 2% 초과 갭상승 제외",
+        "cost_assumptions": {
+            "slippage_bps_each_side": SETTINGS.backtest_slippage_bps,
+            "buy_fee_bps": SETTINGS.backtest_buy_fee_bps,
+            "sell_fee_tax_bps": SETTINGS.backtest_sell_fee_tax_bps,
+            "same_day_target_stop": "STOP_FIRST",
+        },
         "universe_note": "현재 KRX 상장목록의 시가총액·거래대금 기준 유니버스",
         "config": config,
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -364,12 +493,13 @@ def _build_summary(
         "d5_excess": _metric_summary(rows, "d5_excess_return_pct"),
         "d10_excess": _metric_summary(rows, "d10_excess_return_pct"),
         "d20_excess": _metric_summary(rows, "d20_excess_return_pct"),
+        "strategy_return": _metric_summary(rows, "strategy_return_pct"),
         "mfe": _metric_summary(rows, "mfe_pct"),
         "mae": _metric_summary(rows, "mae_pct"),
         "target_first_count": sum(row.get("first_exit") == "TARGET_FIRST" for row in rows),
         "stop_first_count": sum(row.get("first_exit") == "STOP_FIRST" for row in rows),
-        "same_day_count": sum(row.get("first_exit") == "SAME_DAY" for row in rows),
-        "open_count": sum(row.get("first_exit") == "OPEN" for row in rows),
+        "same_day_count": sum(bool(row.get("same_day_collision")) for row in rows),
+        "open_count": sum(row.get("first_exit") == "TIME_EXIT" for row in rows),
         "by_strategy": _group_summary(rows, "strategy"),
         "by_grade": _group_summary(rows, "grade"),
         "error_count": len(errors),
@@ -442,6 +572,7 @@ def print_summary(summary: dict[str, Any], csv_path: Path, json_path: Path) -> N
     for horizon in HORIZONS:
         print(f"D+{horizon}: {_format_metric(summary[f'd{horizon}'])}")
         print(f"D+{horizon} 시장초과: {_format_metric(summary[f'd{horizon}_excess'])}")
+    print(f"실제 청산 수익률: {_format_metric(summary['strategy_return'])}")
     print(f"MFE: {_format_metric(summary['mfe'])}")
     print(f"MAE: {_format_metric(summary['mae'])}")
     print("[전략별]")
@@ -450,12 +581,13 @@ def print_summary(summary: dict[str, Any], csv_path: Path, json_path: Path) -> N
             f"{strategy}: 신호 {metrics['signal_count']}건 / "
             f"D+5 {_format_metric(metrics['d5'])} / "
             f"D+10 {_format_metric(metrics['d10'])} / "
-            f"D+20 {_format_metric(metrics['d20'])}"
+            f"D+20 {_format_metric(metrics['d20'])} / "
+            f"실제청산 {_format_metric(metrics['strategy_return'])}"
         )
     print(
         "목표/손절 선도달: "
         f"목표 {summary['target_first_count']} / 손절 {summary['stop_first_count']} / "
-        f"동일일 {summary['same_day_count']} / 미도달 {summary['open_count']}"
+        f"동일일 보수적 손절 {summary['same_day_count']} / 기간청산 {summary['open_count']}"
     )
     print(f"오류: {summary['error_count']}건")
     print(f"CSV: {csv_path}")
