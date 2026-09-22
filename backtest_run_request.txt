@@ -1,0 +1,4 @@
+6-month production backtest rerun requested
+requested_at_utc: 2026-09-22T23:35:00Z
+base_commit: 8af4fa5495c57d198f1866fe5db796116338f935
+command: venv/bin/python backtester.py --days 183 --max-symbols 300
