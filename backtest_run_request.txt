@@ -2,3 +2,9 @@
 requested_at_utc: 2026-09-22T23:35:00Z
 base_commit: 8af4fa5495c57d198f1866fe5db796116338f935
 command: venv/bin/python backtester.py --days 183 --max-symbols 300
+
+
+Market-relative-strength scoring retest
+requested_at_utc: 2026-09-27T14:35:00Z
+base_commit: d117fa35238741b7f60d3894bcb452fb3ebd8e75
+command: venv/bin/python backtester.py --days 183 --max-symbols 300
