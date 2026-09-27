@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 import pandas as pd
 
@@ -17,6 +18,7 @@ from strategies import (
     _score_vcp,
     attach_relative_strength,
     diagnose_strategy_filters,
+    evaluate_mid_strategy,
     prepare_indicators,
 )
 
@@ -59,6 +61,44 @@ class TechnicalStrengthScoreTests(unittest.TestCase):
         self.assertAlmostEqual(result["rs_1m"], 0.0)
         self.assertAlmostEqual(result["rs_3m"], 0.0)
         self.assertAlmostEqual(result["rs_6m"], 0.0)
+
+    def test_mid_strategy_uses_configured_twenty_percent_target(self) -> None:
+        latest = pd.Series({"종가": 100.0, "ma20": 98.0, "ma60": 95.0})
+        metrics = {
+            "latest": latest,
+            "ma20_slope": 0.1,
+            "ma60_slope": 0.0,
+            "high60": 105.0,
+            "daily_change_pct": 2.0,
+            "high52_ratio": 0.95,
+        }
+        score_functions = (
+            "strategies._score_liquidity",
+            "strategies._score_volume",
+            "strategies._score_ma_trend",
+            "strategies._score_breakout",
+            "strategies._score_box_breakout",
+            "strategies._score_vcp",
+            "strategies._score_relative_strength",
+            "strategies._score_risk_reward",
+            "strategies._score_not_overheated",
+        )
+        with patch("strategies._calculate_common_metrics", return_value=metrics), patch(
+            "strategies._passes_downside_risk_filter", return_value=True
+        ), patch("strategies._has_confirmed_relative_strength", return_value=True), patch(
+            "strategies._build_candidate",
+            side_effect=lambda *args: {"target_price": args[5]},
+        ):
+            patches = [patch(name, return_value=0) for name in score_functions]
+            for item in patches:
+                item.start()
+            try:
+                result = evaluate_mid_strategy("005930", "삼성전자", pd.DataFrame())
+            finally:
+                for item in reversed(patches):
+                    item.stop()
+
+        self.assertEqual(result["target_price"], 120.0)
 
     def test_swing_relative_strength_requires_positive_midterm_and_breadth(self) -> None:
         self.assertTrue(
