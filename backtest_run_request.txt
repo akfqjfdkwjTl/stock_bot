@@ -8,3 +8,9 @@ Market-relative-strength scoring retest
 requested_at_utc: 2026-09-27T14:35:00Z
 base_commit: d117fa35238741b7f60d3894bcb452fb3ebd8e75
 command: venv/bin/python backtester.py --days 183 --max-symbols 300
+
+
+Retest after preserving zero-strength baseline threshold
+requested_at_utc: 2026-09-27T14:40:00Z
+base_commit: 171ef36ad23b7662cba8ff2b6773b2166d0595c3
+command: venv/bin/python backtester.py --days 183 --max-symbols 300
