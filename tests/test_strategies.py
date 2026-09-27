@@ -12,6 +12,7 @@ from strategies import (
     _passes_downside_risk_filter,
     _score_breakout,
     _score_relative_strength,
+    _has_confirmed_relative_strength,
     _score_risk_reward,
     _score_vcp,
     attach_relative_strength,
@@ -58,6 +59,23 @@ class TechnicalStrengthScoreTests(unittest.TestCase):
         self.assertAlmostEqual(result["rs_1m"], 0.0)
         self.assertAlmostEqual(result["rs_3m"], 0.0)
         self.assertAlmostEqual(result["rs_6m"], 0.0)
+
+    def test_swing_relative_strength_requires_positive_midterm_and_breadth(self) -> None:
+        self.assertTrue(
+            _has_confirmed_relative_strength(
+                {"rs_1m": 1.0, "rs_3m": 0.5, "rs_6m": -1.0}
+            )
+        )
+        self.assertFalse(
+            _has_confirmed_relative_strength(
+                {"rs_1m": 2.0, "rs_3m": -0.1, "rs_6m": 3.0}
+            )
+        )
+        self.assertFalse(
+            _has_confirmed_relative_strength(
+                {"rs_1m": -1.0, "rs_3m": 1.0, "rs_6m": -0.5}
+            )
+        )
 
     def test_persistent_relative_strength_receives_all_period_points(self) -> None:
         metrics = {"rs_1m": 2.0, "rs_3m": 3.0, "rs_6m": 5.0}

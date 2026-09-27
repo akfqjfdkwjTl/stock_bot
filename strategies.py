@@ -334,6 +334,16 @@ def _score_vcp(metrics: dict[str, Any]) -> int:
     return min(score, 12)
 
 
+def _has_confirmed_relative_strength(metrics: dict[str, Any]) -> bool:
+    """중기 상대강도가 양수이고 세 기간 중 최소 두 기간이 시장을 이기는지 확인합니다."""
+    values = (
+        float(metrics.get("rs_1m", 0) or 0),
+        float(metrics.get("rs_3m", 0) or 0),
+        float(metrics.get("rs_6m", 0) or 0),
+    )
+    return values[1] > 0 and sum(value > 0 for value in values) >= 2
+
+
 def _score_relative_strength(metrics: dict[str, Any]) -> int:
     """기간별 초과수익이 지속될수록 가점하고 단일 기간 급등은 제한합니다."""
     score = 0
@@ -543,6 +553,8 @@ def evaluate_swing_strategy(ticker: str, name: str, df: pd.DataFrame) -> Optiona
 
     if not _passes_downside_risk_filter(metrics, SETTINGS.min_swing_daily_change_pct):
         return None
+    if not _has_confirmed_relative_strength(metrics):
+        return None
 
     box_range_pct = metrics["box_range_pct"]
     if metrics["trading_value"] < 5_000_000_000:
@@ -684,12 +696,7 @@ def evaluate_mid_strategy(ticker: str, name: str, df: pd.DataFrame) -> Optional[
         return None
     if metrics["high52_ratio"] < 0.90:
         return None
-    relative_strength_values = (
-        metrics["rs_1m"],
-        metrics["rs_3m"],
-        metrics["rs_6m"],
-    )
-    if metrics["rs_3m"] <= 0 or sum(value > 0 for value in relative_strength_values) < 2:
+    if not _has_confirmed_relative_strength(metrics):
         return None
 
     stop_price = latest["ma20"] * 0.97
