@@ -1064,6 +1064,12 @@ def render_dashboard(selected_date: str | None = None) -> str:
                     f"승률 {_format_win_rate(d10_metric.get('win_rate_pct'))}",
                 ),
                 render_stat_card(
+                    "D+20 평균",
+                    _format_return(d20_metric.get("average_pct")),
+                    "up" if (d20_metric.get("average_pct") or 0) >= 0 else "down",
+                    f"승률 {_format_win_rate(d20_metric.get('win_rate_pct'))}",
+                ),
+                render_stat_card(
                     "D+20 시장초과",
                     _format_return(excess_metric.get("average_pct")),
                     "up" if (excess_metric.get("average_pct") or 0) >= 0 else "down",
