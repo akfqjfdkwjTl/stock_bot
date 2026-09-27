@@ -345,38 +345,32 @@ def _has_confirmed_relative_strength(metrics: dict[str, Any]) -> bool:
 
 
 def _score_relative_strength(metrics: dict[str, Any]) -> int:
-    """시장초과수익의 크기와 지속성을 반영해 최대 18점을 부여합니다."""
+    """기존 가점은 유지하고 큰 시장초과수익에 추가 가점을 부여합니다."""
     score = 0
     rs_1m = float(metrics.get("rs_1m", 0) or 0)
     rs_3m = float(metrics.get("rs_3m", 0) or 0)
     rs_6m = float(metrics.get("rs_6m", 0) or 0)
 
-    if rs_1m >= 10:
-        score += 4
-    elif rs_1m >= 5:
-        score += 3
-    elif rs_1m >= 2:
+    if rs_1m >= 2:
         score += 2
-    elif rs_1m > 0:
-        score += 1
+        if rs_1m >= 5:
+            score += 1
+        if rs_1m >= 10:
+            score += 1
 
-    if rs_3m >= 15:
-        score += 7
-    elif rs_3m >= 8:
-        score += 5
-    elif rs_3m >= 3:
+    if rs_3m >= 3:
         score += 3
-    elif rs_3m > 0:
-        score += 1
+        if rs_3m >= 8:
+            score += 2
+        if rs_3m >= 15:
+            score += 2
 
-    if rs_6m >= 20:
-        score += 7
-    elif rs_6m >= 10:
+    if rs_6m >= 5:
         score += 5
-    elif rs_6m >= 5:
-        score += 3
-    elif rs_6m > 0:
-        score += 1
+        if rs_6m >= 10:
+            score += 2
+        if rs_6m >= 20:
+            score += 2
     return score
 
 
