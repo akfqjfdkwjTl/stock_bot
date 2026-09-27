@@ -70,8 +70,8 @@ class TechnicalBacktesterTests(unittest.TestCase):
         self.assertAlmostEqual(row["d5_return_pct"], 4.591, places=3)
         self.assertAlmostEqual(row["d10_return_pct"], 9.5715, places=3)
         self.assertAlmostEqual(row["d20_return_pct"], 19.5326, places=3)
-        self.assertAlmostEqual(row["strategy_return_pct"], 9.5715, places=3)
-        self.assertEqual(row["first_exit"], "TARGET_FIRST")
+        self.assertAlmostEqual(row["strategy_return_pct"], -0.3895, places=3)
+        self.assertEqual(row["first_exit"], "TRAIL_STOP")
         self.assertIsNotNone(row["d5_excess_return_pct"])
 
     def test_same_day_target_and_stop_does_not_guess_order(self) -> None:
