@@ -260,27 +260,16 @@ def _simulate_trade_exit(
     forward: pd.DataFrame,
     target_price: float | None,
     stop_price: float | None,
-    trailing_steps: tuple[tuple[float, float], ...] = (),
 ) -> dict[str, Any]:
-    """목표·손절 및 단계형 이익보호 청산을 일봉 기준으로 계산합니다.
+    """목표·손절 선도달을 실제 청산으로 반영합니다.
 
-    일봉 안에서 목표·손절 순서를 알 수 없으면 손절을 먼저 적용합니다.
-    이익보호선은 당일 고가로 발동하더라도 다음 거래일부터 유효하게 해
-    같은 봉 안의 가격 순서를 추정하지 않습니다.
+    같은 일봉에서 목표와 손절이 모두 닿으면 체결 순서를 알 수 없으므로 손절을
+    먼저 적용해 과대평가를 막습니다.
     """
     exit_price = None
     exit_date = ""
     exit_reason = "TIME_EXIT"
     same_day_collision = False
-    initial_stop_price = stop_price
-    active_stop_price = stop_price
-
-    def stop_reason() -> str:
-        if active_stop_price is not None and (
-            initial_stop_price is None or active_stop_price > initial_stop_price
-        ):
-            return "TRAIL_STOP"
-        return "STOP_FIRST"
 
     for index, row in forward.iterrows():
         row_open = float(row["시가"])
@@ -288,10 +277,10 @@ def _simulate_trade_exit(
         row_low = float(row["저가"])
         row_date = pd.Timestamp(index).date().isoformat()
 
-        if active_stop_price is not None and row_open <= active_stop_price:
+        if stop_price is not None and row_open <= stop_price:
             exit_price = row_open
             exit_date = row_date
-            exit_reason = stop_reason()
+            exit_reason = "STOP_FIRST"
             break
         if target_price is not None and row_open >= target_price:
             exit_price = row_open
@@ -300,31 +289,23 @@ def _simulate_trade_exit(
             break
 
         target_hit = target_price is not None and row_high >= target_price
-        stop_hit = active_stop_price is not None and row_low <= active_stop_price
+        stop_hit = stop_price is not None and row_low <= stop_price
         if target_hit and stop_hit:
-            exit_price = active_stop_price
+            exit_price = stop_price
             exit_date = row_date
-            exit_reason = stop_reason()
+            exit_reason = "STOP_FIRST"
             same_day_collision = True
             break
         if stop_hit:
-            exit_price = active_stop_price
+            exit_price = stop_price
             exit_date = row_date
-            exit_reason = stop_reason()
+            exit_reason = "STOP_FIRST"
             break
         if target_hit:
             exit_price = target_price
             exit_date = row_date
             exit_reason = "TARGET_FIRST"
             break
-
-        if trailing_steps:
-            favorable_return_pct = _return_pct(entry_price, row_high)
-            for activation_pct, locked_return_pct in trailing_steps:
-                if favorable_return_pct >= activation_pct:
-                    step_stop = entry_price * (1 + locked_return_pct / 100)
-                    if active_stop_price is None or step_stop > active_stop_price:
-                        active_stop_price = step_stop
 
     if exit_price is None and not forward.empty:
         exit_price = float(forward.iloc[-1]["종가"])
@@ -339,6 +320,7 @@ def _simulate_trade_exit(
         "first_exit": exit_reason,
         "same_day_collision": same_day_collision,
     }
+
 
 def _benchmark_returns(
     benchmark: pd.DataFrame | None,
@@ -440,19 +422,7 @@ def _measure_selection(
             if len(forward) >= horizon
             else None
         )
-    trailing_steps: tuple[tuple[float, float], ...] = ()
-    if candidate.get("strategy_type") == "mid":
-        trailing_steps = (
-            (SETTINGS.mid_profit_lock_activation_pct, SETTINGS.mid_profit_lock_first_stop_pct),
-            (SETTINGS.mid_profit_lock_second_activation_pct, SETTINGS.mid_profit_lock_second_stop_pct),
-        )
-    exit_metrics = _simulate_trade_exit(
-        entry_price,
-        forward,
-        target_price,
-        stop_price,
-        trailing_steps=trailing_steps,
-    )
+    exit_metrics = _simulate_trade_exit(entry_price, forward, target_price, stop_price)
     performance.update(exit_metrics)
     benchmark_metrics = _benchmark_returns(benchmark, entry_date)
     strategy_benchmark_return = _benchmark_return_for_holding(
@@ -544,20 +514,6 @@ def _build_summary(
             "sell_fee_tax_bps": SETTINGS.backtest_sell_fee_tax_bps,
             "same_day_target_stop": "STOP_FIRST",
         },
-        "mid_exit_rule": {
-            "target_pct": SETTINGS.mid_target_pct,
-            "profit_lock_steps": [
-                {
-                    "activation_pct": SETTINGS.mid_profit_lock_activation_pct,
-                    "stop_pct": SETTINGS.mid_profit_lock_first_stop_pct,
-                },
-                {
-                    "activation_pct": SETTINGS.mid_profit_lock_second_activation_pct,
-                    "stop_pct": SETTINGS.mid_profit_lock_second_stop_pct,
-                },
-            ],
-            "activation_timing": "next_session",
-        },
         "universe_note": "현재 KRX 상장목록의 시가총액·거래대금 기준 유니버스",
         "config": config,
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -576,8 +532,7 @@ def _build_summary(
         "mfe": _metric_summary(rows, "mfe_pct"),
         "mae": _metric_summary(rows, "mae_pct"),
         "target_first_count": sum(row.get("first_exit") == "TARGET_FIRST" for row in rows),
-        "stop_first_count": sum(row.get("first_exit") in {"STOP_FIRST", "TRAIL_STOP"} for row in rows),
-        "trailing_stop_count": sum(row.get("first_exit") == "TRAIL_STOP" for row in rows),
+        "stop_first_count": sum(row.get("first_exit") == "STOP_FIRST" for row in rows),
         "same_day_count": sum(bool(row.get("same_day_collision")) for row in rows),
         "open_count": sum(row.get("first_exit") == "TIME_EXIT" for row in rows),
         "by_strategy": _group_summary(rows, "strategy"),
@@ -665,19 +620,9 @@ def print_summary(summary: dict[str, Any], csv_path: Path, json_path: Path) -> N
             f"D+20 {_format_metric(metrics['d20'])} / "
             f"실제청산 {_format_metric(metrics['strategy_return'])}"
         )
-    print("[등급별]")
-    for grade, metrics in summary["by_grade"].items():
-        print(
-            f"{grade}: 신호 {metrics['signal_count']}건 / "
-            f"D+5 {_format_metric(metrics['d5'])} / "
-            f"D+10 {_format_metric(metrics['d10'])} / "
-            f"D+20 {_format_metric(metrics['d20'])} / "
-            f"실제청산 {_format_metric(metrics['strategy_return'])}"
-        )
     print(
         "목표/손절 선도달: "
-        f"목표 {summary['target_first_count']} / 손절 {summary['stop_first_count']} "
-        f"(이익보호 {summary['trailing_stop_count']}) / "
+        f"목표 {summary['target_first_count']} / 손절 {summary['stop_first_count']} / "
         f"동일일 보수적 손절 {summary['same_day_count']} / 기간청산 {summary['open_count']}"
     )
     print(f"오류: {summary['error_count']}건")
