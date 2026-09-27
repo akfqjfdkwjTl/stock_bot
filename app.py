@@ -1032,6 +1032,75 @@ def render_dashboard(selected_date: str | None = None) -> str:
     db_notice = "".join(f'<div class="db-notice">{esc(error)}</div>' for error in notices)
     date_controls = render_date_controls(recent_dates, all_dates, resolved_date)
 
+    latest_backtest, _, backtest_report_error = load_backtest_report()
+    if latest_backtest and not backtest_report_error:
+        backtest_config = latest_backtest.get("config", {})
+        strategy_metric = latest_backtest.get("strategy_return", {})
+        strategy_average = strategy_metric.get("average_pct")
+        strategy_win_rate = strategy_metric.get("win_rate_pct")
+        strategy_count = int(strategy_metric.get("sample_count") or 0)
+        d5_metric = latest_backtest.get("d5", {})
+        d10_metric = latest_backtest.get("d10", {})
+        d20_metric = latest_backtest.get("d20", {})
+        excess_metric = latest_backtest.get("d20_excess", {})
+        backtest_metric_cards = "".join(
+            [
+                render_stat_card(
+                    "실제 청산 평균",
+                    _format_return(strategy_average),
+                    "up" if strategy_average is not None and strategy_average >= 0 else "down" if strategy_average is not None else "neutral",
+                    f"{strategy_count}건 · 승률 {_format_win_rate(strategy_win_rate)}",
+                ),
+                render_stat_card(
+                    "D+5 평균",
+                    _format_return(d5_metric.get("average_pct")),
+                    "up" if (d5_metric.get("average_pct") or 0) >= 0 else "down",
+                    f"승률 {_format_win_rate(d5_metric.get('win_rate_pct'))}",
+                ),
+                render_stat_card(
+                    "D+10 평균",
+                    _format_return(d10_metric.get("average_pct")),
+                    "up" if (d10_metric.get("average_pct") or 0) >= 0 else "down",
+                    f"승률 {_format_win_rate(d10_metric.get('win_rate_pct'))}",
+                ),
+                render_stat_card(
+                    "D+20 시장초과",
+                    _format_return(excess_metric.get("average_pct")),
+                    "up" if (excess_metric.get("average_pct") or 0) >= 0 else "down",
+                    f"승률 {_format_win_rate(excess_metric.get('win_rate_pct'))}",
+                ),
+            ]
+        )
+        backtest_period = (
+            f"{backtest_config.get('start', 'N/A')} ~ {backtest_config.get('end', 'N/A')}"
+        )
+        backtest_snapshot = f"""
+      <section class="section">
+        <div class="section-head">
+          <div>
+            <p class="section-label">LATEST BACKTEST</p>
+            <h2>6개월 기술적 백테스트</h2>
+          </div>
+          <a class="page-nav" href="/backtest">상세 결과 →</a>
+        </div>
+        <div class="performance-summary">{backtest_metric_cards}</div>
+        <p class="hero-note">기간 {esc(backtest_period)} · 신호일 {int(latest_backtest.get("signal_days") or 0)}일 · 추천 기록 {int(latest_backtest.get("signal_count") or 0)}건</p>
+      </section>
+        """
+    else:
+        backtest_snapshot = f"""
+      <section class="section">
+        <div class="section-head">
+          <div>
+            <p class="section-label">LATEST BACKTEST</p>
+            <h2>6개월 기술적 백테스트</h2>
+          </div>
+          <a class="page-nav" href="/backtest">상세 결과 →</a>
+        </div>
+        <div class="empty-card"><p>{esc(backtest_report_error or "백테스트 결과를 불러올 수 없습니다.")}</p></div>
+      </section>
+        """
+
     return f"""<!doctype html>
 <html lang="ko">
 <head>
@@ -1791,6 +1860,7 @@ def render_dashboard(selected_date: str | None = None) -> str:
 
     <main class="content">
       {db_notice}
+      {backtest_snapshot}
       <section class="section">
         <div class="section-head">
           <div>
