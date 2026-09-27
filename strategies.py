@@ -700,7 +700,7 @@ def evaluate_mid_strategy(ticker: str, name: str, df: pd.DataFrame) -> Optional[
         return None
 
     stop_price = latest["ma20"] * 0.97
-    target_price = latest["종가"] * 1.18
+    target_price = latest["종가"] * (1 + SETTINGS.mid_target_pct / 100)
     score_parts = {
         "liquidity": _score_liquidity(metrics),
         "volume": _score_volume(metrics),
