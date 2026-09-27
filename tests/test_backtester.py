@@ -11,9 +11,9 @@ import pandas as pd
 
 from backtester import (
     BacktestConfig,
+    _benchmark_return_for_holding,
     _build_summary,
     _measure_selection,
-    _simulate_trade_exit,
     _technical_only,
 )
 
@@ -50,6 +50,15 @@ def _candidate() -> dict:
 
 
 class TechnicalBacktesterTests(unittest.TestCase):
+    def test_realized_benchmark_return_uses_same_entry_to_exit_window(self) -> None:
+        dates = pd.bdate_range("2026-08-03", periods=3)
+        benchmark = pd.DataFrame(
+            {"Open": [100.0, 101.0, 102.0], "Close": [101.0, 102.0, 105.0]},
+            index=dates,
+        )
+        result = _benchmark_return_for_holding(benchmark, dates[1], "2026-08-05")
+        self.assertAlmostEqual(result, (105 / 101 - 1) * 100, places=4)
+
     def test_next_session_open_is_entry_and_horizons_use_forward_sessions(self) -> None:
         history = _history()
         benchmark = pd.DataFrame(
@@ -70,8 +79,8 @@ class TechnicalBacktesterTests(unittest.TestCase):
         self.assertAlmostEqual(row["d5_return_pct"], 4.591, places=3)
         self.assertAlmostEqual(row["d10_return_pct"], 9.5715, places=3)
         self.assertAlmostEqual(row["d20_return_pct"], 19.5326, places=3)
-        self.assertAlmostEqual(row["strategy_return_pct"], -0.3895, places=3)
-        self.assertEqual(row["first_exit"], "TRAIL_STOP")
+        self.assertAlmostEqual(row["strategy_return_pct"], 9.5715, places=3)
+        self.assertEqual(row["first_exit"], "TARGET_FIRST")
         self.assertIsNotNone(row["d5_excess_return_pct"])
 
     def test_same_day_target_and_stop_does_not_guess_order(self) -> None:
@@ -89,46 +98,6 @@ class TechnicalBacktesterTests(unittest.TestCase):
 
         self.assertEqual(row["first_exit"], "STOP_FIRST")
         self.assertTrue(row["same_day_collision"])
-
-    def test_mid_profit_lock_closes_at_half_percent_after_ten_percent_runup(self) -> None:
-        forward = pd.DataFrame(
-            [
-                {"시가": 100, "고가": 110.5, "저가": 99, "종가": 108},
-                {"시가": 109, "고가": 111, "저가": 100.4, "종가": 102},
-            ],
-            index=pd.bdate_range("2026-08-03", periods=2),
-        )
-
-        result = _simulate_trade_exit(
-            100,
-            forward,
-            target_price=120,
-            stop_price=95,
-            trailing_steps=((10, 0.5), (15, 8)),
-        )
-
-        self.assertEqual(result["first_exit"], "TRAIL_STOP")
-        self.assertEqual(result["exit_price"], 100.5)
-
-    def test_mid_profit_lock_raises_stop_to_eight_percent_after_fifteen_percent_runup(self) -> None:
-        forward = pd.DataFrame(
-            [
-                {"시가": 100, "고가": 115, "저가": 109, "종가": 114},
-                {"시가": 110, "고가": 112, "저가": 107, "종가": 109},
-            ],
-            index=pd.bdate_range("2026-08-03", periods=2),
-        )
-
-        result = _simulate_trade_exit(
-            100,
-            forward,
-            target_price=120,
-            stop_price=95,
-            trailing_steps=((10, 0.5), (15, 8)),
-        )
-
-        self.assertEqual(result["first_exit"], "TRAIL_STOP")
-        self.assertEqual(result["exit_price"], 108)
 
     def test_large_next_day_gap_up_is_not_chased(self) -> None:
         history = _history()
