@@ -345,14 +345,38 @@ def _has_confirmed_relative_strength(metrics: dict[str, Any]) -> bool:
 
 
 def _score_relative_strength(metrics: dict[str, Any]) -> int:
-    """기간별 초과수익이 지속될수록 가점하고 단일 기간 급등은 제한합니다."""
+    """시장초과수익의 크기와 지속성을 반영해 최대 18점을 부여합니다."""
     score = 0
-    if metrics.get("rs_1m", 0) >= 2:
-        score += 2
-    if metrics.get("rs_3m", 0) >= 3:
+    rs_1m = float(metrics.get("rs_1m", 0) or 0)
+    rs_3m = float(metrics.get("rs_3m", 0) or 0)
+    rs_6m = float(metrics.get("rs_6m", 0) or 0)
+
+    if rs_1m >= 10:
+        score += 4
+    elif rs_1m >= 5:
         score += 3
-    if metrics.get("rs_6m", 0) >= 5:
+    elif rs_1m >= 2:
+        score += 2
+    elif rs_1m > 0:
+        score += 1
+
+    if rs_3m >= 15:
+        score += 7
+    elif rs_3m >= 8:
         score += 5
+    elif rs_3m >= 3:
+        score += 3
+    elif rs_3m > 0:
+        score += 1
+
+    if rs_6m >= 20:
+        score += 7
+    elif rs_6m >= 10:
+        score += 5
+    elif rs_6m >= 5:
+        score += 3
+    elif rs_6m > 0:
+        score += 1
     return score
 
 
@@ -700,7 +724,7 @@ def evaluate_mid_strategy(ticker: str, name: str, df: pd.DataFrame) -> Optional[
         return None
 
     stop_price = latest["ma20"] * 0.97
-    target_price = latest["종가"] * (1 + SETTINGS.mid_target_pct / 100)
+    target_price = latest["종가"] * 1.18
     score_parts = {
         "liquidity": _score_liquidity(metrics),
         "volume": _score_volume(metrics),
